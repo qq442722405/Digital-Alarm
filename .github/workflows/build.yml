@@ -25,10 +25,10 @@ jobs:
 
     - name: 使用 PyInstaller 打包
       run: |
-        pyinstaller --noconsole --onefile --collect-all paddleocr --collect-all paddle --add-data "1.ico;." --name "ScreenMonitorAlarm" ScreenAlarm.py
+        pyinstaller --noconsole --onefile --clean --icon="1.ico" --add-data "1.ico;." --collect-all paddleocr --collect-all paddle --name "数字报警" ScreenAlarm.py
 
     - name: 上传生成的 EXE 成果物
       uses: actions/upload-artifact@v4
       with:
-        name: ScreenMonitorAlarm-Windows
-        path: dist/ScreenMonitorAlarm.exe
+        name: 数字报警-Windows
+        path: dist/数字报警.exe
