@@ -1,7 +1,7 @@
 name: 数字报警
 
 on:
-  workflow_dispatch:   # 手动触发
+  workflow_dispatch:
 
 jobs:
   build:
@@ -21,14 +21,14 @@ jobs:
         python -m pip install --upgrade pip
         pip install pyqt5 pillow pyinstaller
         
-        # 1. 从官方源安装 paddlepaddle（CPU版本，稳定可靠）
+        # 安装 paddlepaddle CPU版
         pip install paddlepaddle==2.6.1 -f https://www.paddlepaddle.org.cn/whl/windows/mkl/avx/stable.html
         
-        # 2. 安装 paddleocr 但不自动拉取 PyMuPDF 等编译失败的包
+        # 安装 paddleocr，但不自动拉取 PyMuPDF 等编译失败的包
         pip install paddleocr==2.7.0 --no-deps
         
-        # 3. 手动补上 PaddleOCR 真正需要的依赖（无 PyMuPDF）
-        pip install opencv-python attrdict shapely pyclipper
+        # 手动补上 PaddleOCR 所需的全部依赖
+        pip install opencv-python attrdict shapely pyclipper scikit-image
 
     - name: Download PaddleOCR models
       run: |
