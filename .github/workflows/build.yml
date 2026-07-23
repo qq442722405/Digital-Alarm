@@ -1,38 +1,34 @@
 name: 数字报警
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch: # 支持在 GitHub 页面手动点击运行
 
 jobs:
   build:
     runs-on: windows-latest
 
     steps:
-    - name: Checkout code
+    - name: 检出代码
       uses: actions/checkout@v4
 
-    - name: Set up Python 3.11
+    - name: 配置 Python 环境
       uses: actions/setup-python@v5
       with:
-        python-version: '3.11'
+        python-version: '3.10' # 建议使用 3.10，对 PaddleOCR 和 PyQt5 兼容性最好
 
-    - name: Install dependencies
+    - name: 安装依赖
       run: |
         python -m pip install --upgrade pip
-        pip install pyqt5 pillow pyinstaller
-        # 安装最新版 PaddlePaddle 和 PaddleOCR（会自动带 PyTorch，但云端编译无问题）
-        pip install paddlepaddle paddleocr
+        pip install -r requirements.txt
 
-    - name: Download PaddleOCR models (will be stored in ~/.paddlex)
+    - name: 使用 PyInstaller 打包
       run: |
-        python -c "from paddleocr import PaddleOCR; ocr = PaddleOCR(lang='ch', show_log=False); print('Models ready')"
+        pyinstaller --noconsole --onefile --collect-all paddleocr --collect-all paddle --add-data "1.ico;." --name "ScreenMonitorAlarm" main.py
 
-    - name: Build EXE (collect all dependencies automatically)
-      run: |
-        pyinstaller --onefile --windowed --name "数字报警" --add-data "$env:USERPROFILE\.paddlex;./.paddlex" --add-data "1.ico;." --collect-all paddleocr --collect-all paddle --collect-all torch --hidden-import win32api ScreenAlarm.py
-
-    - name: Upload artifact
+    - name: 上传生成的 EXE 成果物
       uses: actions/upload-artifact@v4
       with:
-        name: 数字报警
-        path: dist\数字报警.exe
+        name: ScreenMonitorAlarm-Windows
+        path: dist/ScreenMonitorAlarm.exe
