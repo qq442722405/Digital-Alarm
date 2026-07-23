@@ -3,6 +3,17 @@ import json
 import os
 import numpy as np
 from datetime import datetime
+import ctypes
+
+# ---------- 1. Windows 高 DPI 兼容性设置（必须在创建 QApplication 前执行，防止 DPI 导致的缩放闪退） ----------
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTableWidget, QTableWidgetItem, QComboBox, QCheckBox,
@@ -10,33 +21,36 @@ from PyQt5.QtWidgets import (
     QSlider, QDoubleSpinBox
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QRect
-from PyQt5.QtGui import QPainter, QPen, QColor, QIcon, QImage, QPixmap, QGuiApplication
+from PyQt5.QtGui import QPainter, QPen, QColor, QIcon
 from paddleocr import PaddleOCR
 from PIL import Image, ImageEnhance, ImageGrab
 import winsound
-import ctypes
 
-# 获取图标路径
+# 获取 1.ICO 路径（兼容源码运行与打包后的临时目录）
 def get_icon_path():
     if getattr(sys, 'frozen', False):
         base_path = sys._MEIPASS
     else:
         base_path = os.path.dirname(os.path.abspath(__file__))
+    
     for name in ["1.ICO", "1.ico"]:
         path = os.path.join(base_path, name)
         if os.path.exists(path):
             return path
     return None
 
-# ---------- 全屏静态冻结框选器 (基于 Qt 原生截图) ----------
+
+# ---------- 2. 全新设计的矢量半透明框选器（无截图，彻底避免闪退） ----------
 class RegionSelector(QWidget):
     region_selected = pyqtSignal(QRect)
 
     def __init__(self):
         super().__init__()
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+        # 设置无边框、置顶、无任务栏图标
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.SubWindow)
+        self.setAttribute(Qt.WA_TranslucentBackground)
         self.setCursor(Qt.CrossCursor)
-        self.bg_pixmap = None
+        
         self.start_pos = None
         self.end_pos = None
         self.is_selecting = False
@@ -50,17 +64,7 @@ class RegionSelector(QWidget):
         self.is_selecting = False
         self.rect = QRect()
 
-        # 使用 Qt 原生 QScreen 截图，彻底规避 PIL 在高 DPI/多屏下的闪退 Bug
-        try:
-            screen = QGuiApplication.primaryScreen()
-            if screen:
-                self.bg_pixmap = screen.grabWindow(0)
-            else:
-                self.bg_pixmap = None
-        except Exception as e:
-            self.bg_pixmap = None
-            print(f"原生截图失败: {e}")
-
+        screen = QApplication.primaryScreen()
         if screen:
             self.setGeometry(screen.geometry())
         
@@ -71,42 +75,42 @@ class RegionSelector(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        # 1. 绘制底层截图
-        if self.bg_pixmap:
-            painter.drawPixmap(0, 0, self.bg_pixmap)
-        else:
-            painter.fillRect(self.rect(), QColor(50, 50, 50))
-
-        # 2. 遮罩层
+        # 1. 全屏填充半透明黑色暗色遮罩 (Alpha = 110)
         painter.fillRect(self.rect(), QColor(0, 0, 0, 110))
 
-        # 3. 顶部提示文字
+        # 2. 绘制顶部指引文字
         painter.setPen(QPen(Qt.white))
         font = painter.font()
         font.setPointSize(13)
         font.setBold(True)
         painter.setFont(font)
-        painter.drawText(30, 45, f"{self.tip_text} （按 ESC 取消）")
+        painter.drawText(40, 50, f"{self.tip_text} （按 ESC 取消框选）")
 
-        # 4. 框选拉伸绘制
+        # 3. 拖拽框选实时绘制
         if self.rect.width() > 0 and self.rect.height() > 0:
-            if self.bg_pixmap:
-                painter.drawPixmap(self.rect, self.bg_pixmap, self.rect)
+            # 镂空选中区域（透出底层屏幕内容）
+            painter.setCompositionMode(QPainter.CompositionMode_Clear)
+            painter.fillRect(self.rect, Qt.transparent)
+            
+            # 恢复正常绘制模式
+            painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
 
+            # 绘制红框边框
             painter.setPen(QPen(QColor(255, 0, 0), 2, Qt.SolidLine))
             painter.drawRect(self.rect)
 
+            # 绘制坐标提示小标签
             coord_info = f"X:{self.rect.x()} Y:{self.rect.y()} | W:{self.rect.width()} H:{self.rect.height()}"
+            text_y = max(15, self.rect.y() - 25)
             
             painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor(0, 0, 0, 180))
-            text_y = max(30, self.rect.y() - 25)
-            painter.drawRect(self.rect.x(), text_y, 240, 22)
+            painter.setBrush(QColor(255, 0, 0, 200))
+            painter.drawRect(self.rect.x(), text_y, 230, 22)
 
-            painter.setPen(QPen(QColor(255, 255, 0)))
+            painter.setPen(QPen(Qt.white))
             font.setPointSize(10)
             painter.setFont(font)
-            painter.drawText(self.rect.x() + 5, text_y + 16, coord_info)
+            painter.drawText(self.rect.x() + 6, text_y + 16, coord_info)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -139,7 +143,8 @@ class RegionSelector(QWidget):
         if event.key() == Qt.Key_Escape:
             self.hide()
 
-# ---------- OCR 识别子线程 ----------
+
+# ---------- 3. OCR 识别后台子线程 ----------
 class OCRWorker(QThread):
     result_signal = pyqtSignal(list)
 
@@ -197,18 +202,23 @@ class OCRWorker(QThread):
     def stop(self):
         self.running = False
 
-# ---------- 主窗口 ----------
+
+# ---------- 4. 主窗口 ----------
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("屏幕监控报警工具")
         self.setGeometry(100, 100, 1050, 750)
 
+        # 加载并应用 1.ICO 图标
         ico_path = get_icon_path()
         if ico_path:
-            self.setWindowIcon(QIcon(ico_path))
+            icon = QIcon(ico_path)
+            self.setWindowIcon(icon)
+            QApplication.setWindowIcon(icon)
             try:
-                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ScreenMonitorAlarm")
+                # 注册 AppUserModelID，保证 Windows 任务栏正确显示 1.ICO
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ScreenMonitorAlarm.App.1.0")
             except Exception:
                 pass
 
@@ -265,9 +275,9 @@ class MainWindow(QMainWindow):
         alarm_layout.addStretch()
         main_layout.addWidget(alarm_group)
 
-        # 3. 区域表格（坐标列支持双击直接手动输入）
+        # 3. 区域表格 (坐标支持手动编辑)
         self.table = QTableWidget(10, 5)
-        self.table.setHorizontalHeaderLabels(["行号", "操作", "区域坐标 X, Y, W, H (可双击修改)", "实时识别值", "状态"])
+        self.table.setHorizontalHeaderLabels(["行号", "操作", "区域坐标 X, Y, W, H (可手动修改)", "实时识别值", "状态"])
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setColumnWidth(0, 60)
         self.table.setColumnWidth(1, 80)
@@ -276,15 +286,12 @@ class MainWindow(QMainWindow):
 
         for i in range(10):
             self.table.setItem(i, 0, QTableWidgetItem(f"第 {i+1} 行"))
-            
-            # 第一列不可编辑
             self.table.item(i, 0).setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
             
             btn = QPushButton("框选")
             btn.clicked.connect(lambda checked, row=i: self.set_single_region(row))
             self.table.setCellWidget(i, 1, btn)
             
-            # 坐标列默认为空，允许双击编辑
             self.table.setItem(i, 2, QTableWidgetItem("未框选"))
             
             item_val = QTableWidgetItem("")
@@ -343,7 +350,7 @@ class MainWindow(QMainWindow):
         preproc_layout.addStretch()
         main_layout.addWidget(preproc_group)
 
-        # 6. 日志
+        # 6. 日志区域
         log_group = QGroupBox("报警日志")
         log_layout = QVBoxLayout(log_group)
         count_layout = QHBoxLayout()
@@ -357,7 +364,7 @@ class MainWindow(QMainWindow):
         log_layout.addWidget(self.log_text)
         main_layout.addWidget(log_group)
 
-        # 绑定
+        # 事件绑定
         self.btn_start.clicked.connect(self.start_monitor)
         self.btn_stop.clicked.connect(self.stop_monitor)
         self.btn_save.clicked.connect(self.save_config)
@@ -393,21 +400,17 @@ class MainWindow(QMainWindow):
     def stop_alarm_sound(self):
         winsound.PlaySound(None, winsound.SND_PURGE)
 
-    # ---------- 框选与手动输入坐标解析 ----------
+    # ---------- 5. 框选与坐标更新 ----------
     def set_single_region(self, row):
         self.current_set_row = row
-        try:
-            tip = f"按住鼠标左键并拖拽，框选【第 {row+1} 行】识别区域"
-            self.selector.show_selector(tip)
-        except Exception as e:
-            QMessageBox.warning(self, "截图错误", f"调起屏幕框选失败: {e}\n你可以在表格中手动输入坐标！")
+        tip = f"请框选【第 {row+1} 行】识别区域"
+        self.selector.show_selector(tip)
 
     def on_region_selected(self, rect):
         if 0 <= self.current_set_row < 10:
             self.regions[self.current_set_row] = rect
             coord_str = f"{rect.x()}, {rect.y()}, {rect.width()}, {rect.height()}"
             
-            # 暂时阻塞信号避免重复触发
             self.table.blockSignals(True)
             self.table.setItem(self.current_set_row, 2, QTableWidgetItem(coord_str))
             btn = self.table.cellWidget(self.current_set_row, 1)
@@ -417,11 +420,9 @@ class MainWindow(QMainWindow):
             self.table.blockSignals(False)
 
     def on_table_item_changed(self, item):
-        # 监听第 2 列（坐标列）的手动编辑修改
         if item.column() == 2:
             row = item.row()
             text = item.text().strip()
-            # 格式解析如: 100, 200, 150, 40
             try:
                 parts = [int(p.strip()) for p in text.replace("，", ",").split(",")]
                 if len(parts) == 4 and parts[2] > 0 and parts[3] > 0:
@@ -432,10 +433,10 @@ class MainWindow(QMainWindow):
             except Exception:
                 self.regions[row] = None
 
-    # ---------- 监控识别流程 ----------
+    # ---------- 6. 监控流程 ----------
     def start_monitor(self):
         if all(r is None for r in self.regions):
-            QMessageBox.warning(self, "提示", "请至少指定 1 个识别区域（可框选或手动填写坐标）！")
+            QMessageBox.warning(self, "提示", "请至少指定 1 个识别区域！")
             return
 
         if self.ocr is None:
@@ -554,7 +555,7 @@ class MainWindow(QMainWindow):
     def log(self, message):
         self.log_text.append(message)
 
-    # ---------- 配置存取 ----------
+    # ---------- 7. 配置文件保存与读取 ----------
     def save_config(self):
         config = {
             "regions": [],
