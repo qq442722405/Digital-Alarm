@@ -1,6 +1,6 @@
-PyQt5
-numpy
-Pillow
-paddleocr
-paddlepaddle
-pyinstaller
+PyQt5==5.15.10
+Pillow==10.3.0
+numpy<2.0.0
+paddlepaddle==2.6.1
+paddleocr==2.8.1
+pyinstaller==6.5.0

@@ -7,8 +7,9 @@ import numpy as np
 from datetime import datetime
 import ctypes
 
-# 屏蔽 PaddleOCR 内部输出的冗余日志
+# 屏蔽 PaddleOCR / Paddle 内部输出的冗余调试日志
 logging.getLogger('ppocr').setLevel(logging.ERROR)
+logging.getLogger('paddle').setLevel(logging.ERROR)
 
 # ---------- 0. 全局防崩溃日志捕获 ----------
 def global_exception_handler(exc_type, exc_value, exc_traceback):
@@ -51,7 +52,7 @@ def get_icon_path():
             return path
     return None
 
-# ---------- 2. 高亮清晰框选器 (修复黑色遮挡问题) ----------
+# ---------- 2. 高亮清晰框选器 (矢量高亮镂空) ----------
 class SnippingWidget(QWidget):
     region_selected = pyqtSignal(QRect)
 
@@ -93,7 +94,7 @@ class SnippingWidget(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        # 1. 先绘制完整底图（静态屏幕原图）
+        # 1. 先绘制完整静态底图
         if self.bg_pixmap:
             painter.drawPixmap(0, 0, self.bg_pixmap)
 
@@ -103,21 +104,19 @@ class SnippingWidget(QWidget):
         if self.start_pos and self.end_pos:
             rect = QRect(self.start_pos, self.end_pos).normalized()
             if rect.width() > 0 and rect.height() > 0:
-                # 建立全屏区域，并减去选中的 rectangle 区域
                 full_region = QRegion(self.rect())
                 selected_region = QRegion(rect)
                 dim_region = full_region.subtracted(selected_region)
 
-                # 仅对非选中区域填充暗色
                 painter.setClipRegion(dim_region)
                 painter.fillRect(self.rect(), overlay_color)
-                painter.setClipping(False)  # 还原裁剪区域
+                painter.setClipping(False)
 
-                # 绘制红框边框
+                # 绘制红框
                 painter.setPen(QPen(QColor(255, 0, 0), 2, Qt.SolidLine))
                 painter.drawRect(rect)
 
-                # 绘制坐标提示信息
+                # 绘制坐标提示
                 coord_text = f"X:{rect.x()} Y:{rect.y()} | W:{rect.width()} H:{rect.height()}"
                 text_y = max(20, rect.y() - 10)
                 
@@ -135,7 +134,7 @@ class SnippingWidget(QWidget):
         else:
             painter.fillRect(self.rect(), overlay_color)
 
-        # 3. 绘制顶部提示信息
+        # 3. 绘制提示
         painter.setPen(QPen(Qt.white))
         font = painter.font()
         font.setPointSize(14)
@@ -470,13 +469,31 @@ class MainWindow(QMainWindow):
         if self.ocr is None:
             self.log("正在初始化 OCR 引擎，请稍候...")
             QApplication.processEvents()
-            try:
-                # 已移除 show_log=False 参数，彻底兼容新版 PaddleOCR
-                self.ocr = PaddleOCR(use_angle_cls=False, lang='ch')
-                self.log("OCR 引擎初始化成功。")
-            except Exception as e:
-                QMessageBox.critical(self, "错误", f"初始化 PaddleOCR 失败: {e}")
+            
+            # 多重兼容降级初始化策略 (彻底解决各种版本的 Pipeline 报错问题)
+            ocr_initialized = False
+            last_err = ""
+            
+            init_configs = [
+                {"use_angle_cls": False, "lang": "ch"},
+                {"lang": "ch"},
+                {"ocr_version": "PP-OCRv4", "lang": "ch"},
+                {"ocr_version": "PP-OCRv3", "lang": "ch"}
+            ]
+            
+            for cfg in init_configs:
+                try:
+                    self.ocr = PaddleOCR(**cfg)
+                    ocr_initialized = True
+                    break
+                except Exception as e:
+                    last_err = str(e)
+
+            if not ocr_initialized:
+                QMessageBox.critical(self, "错误", f"初始化 PaddleOCR 失败: {last_err}")
                 return
+
+            self.log("OCR 引擎初始化成功。")
 
         self.alarm_value = self.edit_alarm_value.text().strip()
         self.comp_op = self.combo_comp_op.currentText()
