@@ -1,7 +1,7 @@
-name: 数字报警 - 手动打包
+name: 数字报警
 
 on:
-  workflow_dispatch:   # 仅允许手动触发
+  workflow_dispatch:   # 手动触发
 
 jobs:
   build:
@@ -21,7 +21,9 @@ jobs:
         python -m pip install --upgrade pip
         pip install pyqt5 pillow pyinstaller
         pip install paddlepaddle==2.6.1 -i https://mirror.baidu.com/pypi/simple
-        pip install paddleocr==2.7.0
+        # 强制不自动安装 PyMuPDF，只装核心依赖
+        pip install paddleocr==2.7.0 --no-deps
+        pip install opencv-python attrdict shapely pyclipper
 
     - name: Download PaddleOCR models
       run: |
