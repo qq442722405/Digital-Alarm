@@ -1,0 +1,6 @@
+PyQt5
+numpy
+Pillow
+paddleocr
+paddlepaddle
+pyinstaller
