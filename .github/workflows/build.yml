@@ -20,23 +20,16 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install pyqt5 pillow pyinstaller
-        
-        # 安装 paddlepaddle CPU版
-        pip install paddlepaddle==2.6.1 -f https://www.paddlepaddle.org.cn/whl/windows/mkl/avx/stable.html
-        
-        # 安装 paddleocr，但不自动拉取 PyMuPDF 等编译失败的包
-        pip install paddleocr==2.7.0 --no-deps
-        
-        # 手动补上 PaddleOCR 所需的全部依赖
-        pip install opencv-python attrdict shapely pyclipper scikit-image
+        # 安装最新版 PaddlePaddle 和 PaddleOCR（会自动带 PyTorch，但云端编译无问题）
+        pip install paddlepaddle paddleocr
 
-    - name: Download PaddleOCR models
+    - name: Download PaddleOCR models (will be stored in ~/.paddlex)
       run: |
-        python -c "from paddleocr import PaddleOCR; ocr = PaddleOCR(use_angle_cls=False, lang='ch', show_log=False); print('Models ready')"
+        python -c "from paddleocr import PaddleOCR; ocr = PaddleOCR(lang='ch', show_log=False); print('Models ready')"
 
-    - name: Build EXE
+    - name: Build EXE (collect all dependencies automatically)
       run: |
-        pyinstaller --onefile --windowed --name "数字报警" --add-data "$env:USERPROFILE\.paddleocr;./.paddleocr" --add-data "1.ico;." --hidden-import paddle --hidden-import win32api ScreenAlarm.py
+        pyinstaller --onefile --windowed --name "数字报警" --add-data "$env:USERPROFILE\.paddlex;./.paddlex" --add-data "1.ico;." --collect-all paddleocr --collect-all paddle --collect-all torch --hidden-import win32api ScreenAlarm.py
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
