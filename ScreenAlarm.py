@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
     QSlider, QDoubleSpinBox
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QRect
-from PyQt5.QtGui import QPainter, QPen, QColor, QIcon
+from PyQt5.QtGui import QPainter, QPen, QColor, QIcon, QImage, QPixmap
 from paddleocr import PaddleOCR
 from PIL import Image, ImageEnhance, ImageGrab
 import winsound
@@ -28,59 +28,87 @@ def get_icon_path():
             return path
     return None
 
-# ---------- 框选区域选择器 ----------
+# ---------- 全屏静态冻结框选器 ----------
 class RegionSelector(QWidget):
     region_selected = pyqtSignal(QRect)
 
     def __init__(self):
         super().__init__()
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
-        self.setAttribute(Qt.WA_TranslucentBackground)
         self.setCursor(Qt.CrossCursor)
-        
+        self.bg_pixmap = None
         self.start_pos = None
         self.end_pos = None
         self.is_selecting = False
         self.rect = QRect()
-        self.tip_text = "按住鼠标左键框选识别区域（ESC 取消）"
+        self.tip_text = ""
 
     def show_selector(self, tip_text=""):
-        if tip_text:
-            self.tip_text = tip_text
+        self.tip_text = tip_text
         self.start_pos = None
         self.end_pos = None
         self.is_selecting = False
         self.rect = QRect()
-        
+
+        # 1. 抓取当前屏幕静态截图，解决透明穿透与界面闪退问题
+        try:
+            img_pil = ImageGrab.grab().convert('RGB')
+            data = img_pil.tobytes()
+            qimg = QImage(data, img_pil.width, img_pil.height, 3 * img_pil.width, QImage.Format_RGB888)
+            self.bg_pixmap = QPixmap.fromImage(qimg)
+        except Exception:
+            self.bg_pixmap = None
+
         screen = QApplication.primaryScreen()
         if screen:
             self.setGeometry(screen.geometry())
-        self.show()
+        
+        self.showFullScreen()
         self.activateWindow()
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        # 1. 绘制半透明遮罩
-        painter.fillRect(self.rect(), QColor(0, 0, 0, 80))
+        # 绘制底层抓取到的屏幕截图
+        if self.bg_pixmap:
+            painter.drawPixmap(0, 0, self.bg_pixmap)
 
-        # 2. 绘制顶部提示文字
+        # 叠加一层半透明暗色遮罩
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 110))
+
+        # 绘制顶部指引文字
         painter.setPen(QPen(Qt.white))
         font = painter.font()
         font.setPointSize(13)
         font.setBold(True)
         painter.setFont(font)
-        painter.drawText(30, 50, self.tip_text)
+        painter.drawText(30, 45, f"{self.tip_text} （按 ESC 取消框选）")
 
-        # 3. 绘制框选红框
+        # 当鼠标拖拽框选时
         if self.rect.width() > 0 and self.rect.height() > 0:
+            # 高亮还原选中区域的图案
+            if self.bg_pixmap:
+                painter.drawPixmap(self.rect, self.bg_pixmap, self.rect)
+
+            # 绘制红色框线
             painter.setPen(QPen(QColor(255, 0, 0), 2, Qt.SolidLine))
-            painter.setBrush(QColor(255, 0, 0, 40))
             painter.drawRect(self.rect)
+
+            # 绘制坐标与尺寸提示标签
+            coord_info = f"坐标: ({self.rect.x()}, {self.rect.y()}) | 尺寸: {self.rect.width()} x {self.rect.height()} px"
             
-            info_text = f"{self.rect.width()} x {self.rect.height()}"
-            painter.drawText(self.rect.x(), max(20, self.rect.y() - 8), info_text)
+            # 标签背景框
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(0, 0, 0, 180))
+            text_y = max(30, self.rect.y() - 25)
+            painter.drawRect(self.rect.x(), text_y, 280, 22)
+
+            # 标签黄色文字
+            painter.setPen(QPen(QColor(255, 255, 0)))
+            font.setPointSize(10)
+            painter.setFont(font)
+            painter.drawText(self.rect.x() + 5, text_y + 16, coord_info)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -101,7 +129,7 @@ class RegionSelector(QWidget):
             self.is_selecting = False
             self.end_pos = event.pos()
             self.rect = QRect(self.start_pos, self.end_pos).normalized()
-            
+
             if self.rect.width() > 5 and self.rect.height() > 5:
                 self.region_selected.emit(self.rect)
                 self.hide()
@@ -176,9 +204,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("屏幕监控报警工具")
-        self.setGeometry(100, 100, 1000, 750)
+        self.setGeometry(100, 100, 1050, 750)
 
-        # 设置图标 (优先 1.ICO)
         ico_path = get_icon_path()
         if ico_path:
             self.setWindowIcon(QIcon(ico_path))
@@ -199,7 +226,6 @@ class MainWindow(QMainWindow):
 
         self.ocr_thread = None
         self.current_set_row = -1
-        self.is_batch_setting = False
 
         self.selector = RegionSelector()
         self.selector.region_selected.connect(self.on_region_selected)
@@ -212,18 +238,16 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
 
-        # 1. 顶栏按钮
+        # 1. 顶栏控制按钮
         btn_layout = QHBoxLayout()
         self.btn_start = QPushButton("▶ 开始监控")
         self.btn_stop = QPushButton("■ 停止监控")
         self.btn_stop.setEnabled(False)
-        self.btn_set_all = QPushButton("📐 依次框选全部")
         self.btn_save = QPushButton("💾 保存配置")
         self.btn_load = QPushButton("📂 加载配置")
 
         btn_layout.addWidget(self.btn_start)
         btn_layout.addWidget(self.btn_stop)
-        btn_layout.addWidget(self.btn_set_all)
         btn_layout.addWidget(self.btn_save)
         btn_layout.addWidget(self.btn_load)
         main_layout.addLayout(btn_layout)
@@ -243,24 +267,26 @@ class MainWindow(QMainWindow):
         alarm_layout.addStretch()
         main_layout.addWidget(alarm_group)
 
-        # 3. 区域列表表格
-        self.table = QTableWidget(10, 4)
-        self.table.setHorizontalHeaderLabels(["行号", "操作", "实时识别值", "状态"])
+        # 3. 区域表格 (包含新增的“区域坐标”列)
+        self.table = QTableWidget(10, 5)
+        self.table.setHorizontalHeaderLabels(["行号", "操作", "区域坐标 (X, Y, W, H)", "实时识别值", "状态"])
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setColumnWidth(0, 60)
-        self.table.setColumnWidth(1, 100)
-        self.table.setColumnWidth(2, 140)
+        self.table.setColumnWidth(1, 80)
+        self.table.setColumnWidth(2, 180)
+        self.table.setColumnWidth(3, 140)
 
         for i in range(10):
             self.table.setItem(i, 0, QTableWidgetItem(f"第 {i+1} 行"))
             btn = QPushButton("框选")
             btn.clicked.connect(lambda checked, row=i: self.set_single_region(row))
             self.table.setCellWidget(i, 1, btn)
-            self.table.setItem(i, 2, QTableWidgetItem(""))
-            self.table.setItem(i, 3, QTableWidgetItem("未框选"))
+            self.table.setItem(i, 2, QTableWidgetItem("未框选"))
+            self.table.setItem(i, 3, QTableWidgetItem(""))
+            self.table.setItem(i, 4, QTableWidgetItem("待设置"))
         main_layout.addWidget(self.table)
 
-        # 4. 报警声音设置（仅保留系统音）
+        # 4. 报警声音设置
         sound_group = QGroupBox("报警声音设置")
         sound_layout = QHBoxLayout(sound_group)
         
@@ -292,7 +318,7 @@ class MainWindow(QMainWindow):
         preproc_layout.addWidget(self.label_sharpness_val)
 
         preproc_layout.addSpacing(20)
-        preproc_layout.addWidget(QLabel("图像放大倍数:"))
+        preproc_layout.addWidget(QLabel("放大倍数:"))
         self.spin_scale = QDoubleSpinBox()
         self.spin_scale.setRange(1.0, 4.0)
         self.spin_scale.setSingleStep(0.1)
@@ -306,7 +332,7 @@ class MainWindow(QMainWindow):
         preproc_layout.addStretch()
         main_layout.addWidget(preproc_group)
 
-        # 6. 报警日志与统计
+        # 6. 报警日志
         log_group = QGroupBox("报警日志")
         log_layout = QVBoxLayout(log_group)
         count_layout = QHBoxLayout()
@@ -320,16 +346,14 @@ class MainWindow(QMainWindow):
         log_layout.addWidget(self.log_text)
         main_layout.addWidget(log_group)
 
-        # 事件绑定
+        # 信号绑定
         self.btn_start.clicked.connect(self.start_monitor)
         self.btn_stop.clicked.connect(self.stop_monitor)
-        self.btn_set_all.clicked.connect(self.set_all_regions)
         self.btn_save.clicked.connect(self.save_config)
         self.btn_load.clicked.connect(self.load_config)
         self.btn_test_sound.clicked.connect(self.test_sound)
         self.slider_sharpness.valueChanged.connect(lambda v: self.label_sharpness_val.setText(str(v)))
 
-    # 彻底关闭程序逻辑
     def quit_app(self):
         self.stop_monitor()
         QApplication.quit()
@@ -358,39 +382,26 @@ class MainWindow(QMainWindow):
     def stop_alarm_sound(self):
         winsound.PlaySound(None, winsound.SND_PURGE)
 
-    # ---------- 框选区域逻辑 ----------
+    # ---------- 框选触发逻辑 ----------
     def set_single_region(self, row):
-        self.is_batch_setting = False
         self.current_set_row = row
-        tip = f"请框选【第 {row+1} 行】识别区域"
+        tip = f"按住鼠标左键并拖拽，框选【第 {row+1} 行】识别区域"
         self.selector.show_selector(tip)
-
-    def set_all_regions(self):
-        self.is_batch_setting = True
-        self.current_set_row = 0
-        self.prompt_next_batch_region()
-
-    def prompt_next_batch_region(self):
-        if self.current_set_row < 10:
-            tip = f"【批量框选 {self.current_set_row + 1}/10】请框选区域（按 ESC 可跳过）"
-            self.selector.show_selector(tip)
-        else:
-            self.is_batch_setting = False
-            QMessageBox.information(self, "完成", "10 个区域已全部框选完毕！")
 
     def on_region_selected(self, rect):
         if 0 <= self.current_set_row < 10:
             self.regions[self.current_set_row] = rect
+            
+            # 在表格第 2 列中实时显示区域坐标
+            coord_str = f"({rect.x()}, {rect.y()}, {rect.width()}, {rect.height()})"
+            self.table.setItem(self.current_set_row, 2, QTableWidgetItem(coord_str))
+            
             btn = self.table.cellWidget(self.current_set_row, 1)
             if btn:
                 btn.setText("重框选")
-            self.table.item(self.current_set_row, 3).setText("待监控")
+            self.table.setItem(self.current_set_row, 4, QTableWidgetItem("待监控"))
 
-        if self.is_batch_setting:
-            self.current_set_row += 1
-            self.prompt_next_batch_region()
-
-    # ---------- 监控识别流程 ----------
+    # ---------- 监控流程 ----------
     def start_monitor(self):
         if all(r is None for r in self.regions):
             QMessageBox.warning(self, "提示", "请至少框选设置 1 个识别区域！")
@@ -444,30 +455,31 @@ class MainWindow(QMainWindow):
         for i, text in enumerate(results):
             if i >= 10:
                 break
-            self.table.item(i, 2).setText(text)
+            # 识别值显示在第 3 列
+            self.table.item(i, 3).setText(text)
 
             if not text or self.regions[i] is None:
                 if self.regions[i] is not None:
-                    self.table.item(i, 3).setText("监测中...")
+                    self.table.item(i, 4).setText("监测中...")
                 self.debounce_counts[i] = 0
                 continue
 
             try:
                 current_val = float(text)
             except ValueError:
-                self.table.item(i, 3).setText("非有效数字")
+                self.table.item(i, 4).setText("非有效数字")
                 self.debounce_counts[i] = 0
                 continue
 
             if not self.alarm_value:
-                self.table.item(i, 3).setText("未设报警值")
+                self.table.item(i, 4).setText("未设报警值")
                 self.debounce_counts[i] = 0
                 continue
 
             try:
                 alarm_val = float(self.alarm_value)
             except ValueError:
-                self.table.item(i, 3).setText("阈值无效")
+                self.table.item(i, 4).setText("阈值无效")
                 self.debounce_counts[i] = 0
                 continue
 
@@ -487,14 +499,14 @@ class MainWindow(QMainWindow):
             if condition_met:
                 self.debounce_counts[i] += 1
                 if self.debounce_counts[i] >= self.debounce_threshold:
-                    self.table.item(i, 3).setText("⚠️ 报警触发！")
+                    self.table.item(i, 4).setText("⚠️ 报警触发！")
                     alarm_triggered = True
                     alarm_rows.append(i + 1)
                 else:
-                    self.table.item(i, 3).setText("疑似超限...")
+                    self.table.item(i, 4).setText("疑似超限...")
             else:
                 self.debounce_counts[i] = 0
-                self.table.item(i, 3).setText("正常")
+                self.table.item(i, 4).setText("正常")
 
         if alarm_triggered:
             if not self.alarm_active:
@@ -512,7 +524,7 @@ class MainWindow(QMainWindow):
     def log(self, message):
         self.log_text.append(message)
 
-    # ---------- 配置文件保存与读取 ----------
+    # ---------- 保存与加载配置 ----------
     def save_config(self):
         config = {
             "regions": [],
@@ -550,12 +562,14 @@ class MainWindow(QMainWindow):
             for i, r in enumerate(regions[:10]):
                 if r:
                     self.regions[i] = QRect(r[0], r[1], r[2], r[3])
+                    self.table.setItem(i, 2, QTableWidgetItem(f"({r[0]}, {r[1]}, {r[2]}, {r[3]})"))
                     btn = self.table.cellWidget(i, 1)
                     if btn:
                         btn.setText("重框选")
-                    self.table.item(i, 3).setText("待监控")
+                    self.table.item(i, 4).setText("待监控")
                 else:
                     self.regions[i] = None
+                    self.table.setItem(i, 2, QTableWidgetItem("未框选"))
 
             self.edit_alarm_value.setText(config.get("alarm_value", ""))
             self.combo_comp_op.setCurrentText(config.get("comp_op", "="))
