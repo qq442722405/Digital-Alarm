@@ -1,0 +1,38 @@
+name: 数字报警 - 手动打包
+
+on:
+  workflow_dispatch:   # 仅允许手动触发
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyqt5 pillow pyinstaller
+        pip install paddlepaddle==2.6.1 -i https://mirror.baidu.com/pypi/simple
+        pip install paddleocr==2.7.0
+
+    - name: Download PaddleOCR models
+      run: |
+        python -c "from paddleocr import PaddleOCR; ocr = PaddleOCR(use_angle_cls=False, lang='ch', show_log=False); print('Models ready')"
+
+    - name: Build EXE
+      run: |
+        pyinstaller --onefile --windowed --name "数字报警" --add-data "$env:USERPROFILE\.paddleocr;./.paddleocr" --add-data "1.ico;." --hidden-import paddle --hidden-import win32api ScreenAlarm.py
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: 数字报警
+        path: dist\数字报警.exe
