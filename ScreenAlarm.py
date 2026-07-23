@@ -2,13 +2,16 @@ import sys
 import json
 import os
 import traceback
+import logging
 import numpy as np
 from datetime import datetime
 import ctypes
 
+# 屏蔽 PaddleOCR 内部输出的冗余日志
+logging.getLogger('ppocr').setLevel(logging.ERROR)
+
 # ---------- 0. 全局防崩溃日志捕获 ----------
 def global_exception_handler(exc_type, exc_value, exc_traceback):
-    """捕获导致闪退的底层 Python 错误并写入日志"""
     with open("crash_log.txt", "w", encoding="utf-8") as f:
         f.write(f"崩溃时间: {datetime.now()}\n")
         traceback.print_exception(exc_type, exc_value, exc_traceback, file=f)
@@ -32,7 +35,7 @@ from PyQt5.QtWidgets import (
     QSlider, QDoubleSpinBox
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QRect
-from PyQt5.QtGui import QPainter, QPen, QColor, QIcon, QImage, QPixmap
+from PyQt5.QtGui import QPainter, QPen, QColor, QIcon, QImage, QPixmap, QRegion
 from paddleocr import PaddleOCR
 from PIL import Image, ImageEnhance, ImageGrab
 import winsound
@@ -48,13 +51,12 @@ def get_icon_path():
             return path
     return None
 
-# ---------- 2. 纯画布静态截图框选器 (终结闪退神级方案) ----------
+# ---------- 2. 高亮清晰框选器 (修复黑色遮挡问题) ----------
 class SnippingWidget(QWidget):
     region_selected = pyqtSignal(QRect)
 
     def __init__(self):
         super().__init__()
-        # 彻底摒弃 WA_TranslucentBackground，改为全不透明的标准无边框窗口
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setCursor(Qt.CrossCursor)
         
@@ -71,9 +73,7 @@ class SnippingWidget(QWidget):
         self.is_selecting = False
         
         try:
-            # 瞬间获取当前屏幕的全屏静态截图，避免动态穿透渲染
             try:
-                # 尝试支持多屏的 PIL 截图
                 img_pil = ImageGrab.grab(all_screens=True).convert("RGB")
             except Exception:
                 img_pil = ImageGrab.grab().convert("RGB")
@@ -93,36 +93,31 @@ class SnippingWidget(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        # 1. 画底层真实的屏幕截图（模拟当前屏幕画面）
+        # 1. 先绘制完整底图（静态屏幕原图）
         if self.bg_pixmap:
             painter.drawPixmap(0, 0, self.bg_pixmap)
 
-        # 2. 画一层半透明的黑色遮罩盖住全图
-        overlay_color = QColor(0, 0, 0, 140)
-        painter.fillRect(self.rect(), overlay_color)
+        overlay_color = QColor(0, 0, 0, 120)
 
-        # 3. 顶部文字指引
-        painter.setPen(QPen(Qt.white))
-        font = painter.font()
-        font.setPointSize(14)
-        font.setBold(True)
-        painter.setFont(font)
-        painter.drawText(50, 50, f"{self.tip_text} (按 ESC 退出)")
-
-        # 4. 框选拖拽时的处理
+        # 2. 计算镂空区域：只对框选之外的区域画暗色遮罩
         if self.start_pos and self.end_pos:
             rect = QRect(self.start_pos, self.end_pos).normalized()
             if rect.width() > 0 and rect.height() > 0:
-                # 核心魔法：使用清除模式，把框选区域的黑膜“擦掉”，透出底层的明亮截图
-                painter.setCompositionMode(QPainter.CompositionMode_Clear)
-                painter.fillRect(rect, Qt.transparent)
+                # 建立全屏区域，并减去选中的 rectangle 区域
+                full_region = QRegion(self.rect())
+                selected_region = QRegion(rect)
+                dim_region = full_region.subtracted(selected_region)
 
-                # 恢复正常模式，画红框和坐标
-                painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+                # 仅对非选中区域填充暗色
+                painter.setClipRegion(dim_region)
+                painter.fillRect(self.rect(), overlay_color)
+                painter.setClipping(False)  # 还原裁剪区域
+
+                # 绘制红框边框
                 painter.setPen(QPen(QColor(255, 0, 0), 2, Qt.SolidLine))
                 painter.drawRect(rect)
-                
-                # 绘制坐标提示
+
+                # 绘制坐标提示信息
                 coord_text = f"X:{rect.x()} Y:{rect.y()} | W:{rect.width()} H:{rect.height()}"
                 text_y = max(20, rect.y() - 10)
                 
@@ -131,9 +126,22 @@ class SnippingWidget(QWidget):
                 painter.drawRect(rect.x(), text_y - 15, 230, 20)
                 
                 painter.setPen(QPen(QColor(255, 255, 0)))
+                font = painter.font()
                 font.setPointSize(10)
                 painter.setFont(font)
                 painter.drawText(rect.x() + 5, text_y, coord_text)
+            else:
+                painter.fillRect(self.rect(), overlay_color)
+        else:
+            painter.fillRect(self.rect(), overlay_color)
+
+        # 3. 绘制顶部提示信息
+        painter.setPen(QPen(Qt.white))
+        font = painter.font()
+        font.setPointSize(14)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(50, 50, f"{self.tip_text} (按 ESC 退出框选)")
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -253,7 +261,6 @@ class MainWindow(QMainWindow):
         self.ocr_thread = None
         self.current_set_row = -1
 
-        # 实例化安全的截图框选器
         self.snipping_widget = SnippingWidget()
         self.snipping_widget.region_selected.connect(self.on_region_selected)
 
@@ -294,9 +301,9 @@ class MainWindow(QMainWindow):
         alarm_layout.addStretch()
         main_layout.addWidget(alarm_group)
 
-        # 3. 区域表格 (支持双击坐标手动修改)
+        # 3. 区域表格
         self.table = QTableWidget(10, 5)
-        self.table.setHorizontalHeaderLabels(["行号", "操作", "区域坐标 X, Y, W, H (支持双击修改)", "实时识别值", "状态"])
+        self.table.setHorizontalHeaderLabels(["行号", "操作", "区域坐标 X, Y, W, H (可手动修改)", "实时识别值", "状态"])
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setColumnWidth(0, 60)
         self.table.setColumnWidth(1, 80)
@@ -419,7 +426,6 @@ class MainWindow(QMainWindow):
     def stop_alarm_sound(self):
         winsound.PlaySound(None, winsound.SND_PURGE)
 
-    # ---------- 5. 框选触发与坐标处理 ----------
     def set_single_region(self, row):
         self.current_set_row = row
         tip = f"请按住左键框选【第 {row+1} 行】的识别区域"
@@ -452,7 +458,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 self.regions[row] = None
                 self.table.blockSignals(True)
-                self.table.item(row, 2).setText("未框选或格式错误")
+                self.table.item(row, 2).setText("未框选")
                 self.table.blockSignals(False)
 
     # ---------- 6. 监控流程 ----------
@@ -465,7 +471,8 @@ class MainWindow(QMainWindow):
             self.log("正在初始化 OCR 引擎，请稍候...")
             QApplication.processEvents()
             try:
-                self.ocr = PaddleOCR(use_angle_cls=False, lang='ch', show_log=False)
+                # 已移除 show_log=False 参数，彻底兼容新版 PaddleOCR
+                self.ocr = PaddleOCR(use_angle_cls=False, lang='ch')
                 self.log("OCR 引擎初始化成功。")
             except Exception as e:
                 QMessageBox.critical(self, "错误", f"初始化 PaddleOCR 失败: {e}")
@@ -577,7 +584,6 @@ class MainWindow(QMainWindow):
     def log(self, message):
         self.log_text.append(message)
 
-    # ---------- 7. 配置文件保存与读取 ----------
     def save_config(self):
         config = {
             "regions": [],
