@@ -1,12 +1,22 @@
 import sys
 import os
+import multiprocessing
 
-# ---------- [0. 必加防闪退补丁] ----------
-# 修复打包为 --noconsole 模式下，底层 PaddleOCR 试图输出 log 导致 sys.stdout 为 None 引起的静默闪退
-if sys.stdout is None:
-    sys.stdout = open(os.devnull, 'w')
-if sys.stderr is None:
-    sys.stderr = open(os.devnull, 'w')
+# ---------- [1. 关键：OpenMP & Paddle 环境变量配置 (防止底层 OMP 冲突闪退)] ----------
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+os.environ["FLAGS_allocator_strategy"] = "naive_best_fit"
+
+# ---------- [2. 关键：完整 Stream 模拟 (彻底解决 --noconsole 模式下无 stdout 导致的崩溃)] ----------
+class NullStream:
+    def write(self, text): pass
+    def flush(self): pass
+    def isatty(self): return False
+    def writelines(self, lines): pass
+
+if sys.stdout is None or not hasattr(sys.stdout, 'write'):
+    sys.stdout = NullStream()
+if sys.stderr is None or not hasattr(sys.stderr, 'write'):
+    sys.stderr = NullStream()
 
 import json
 import traceback
@@ -19,16 +29,30 @@ import ctypes
 logging.getLogger('ppocr').setLevel(logging.ERROR)
 logging.getLogger('paddle').setLevel(logging.ERROR)
 
-# ---------- 1. 全局防崩溃日志捕获 ----------
+# ---------- [3. 全局防崩溃日志捕获 + Win32 原生弹窗] ----------
 def global_exception_handler(exc_type, exc_value, exc_traceback):
-    with open("crash_log.txt", "w", encoding="utf-8") as f:
-        f.write(f"崩溃时间: {datetime.now()}\n")
-        traceback.print_exception(exc_type, exc_value, exc_traceback, file=f)
+    err_msg = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+    try:
+        with open("crash_log.txt", "w", encoding="utf-8") as f:
+            f.write(f"崩溃时间: {datetime.now()}\n\n{err_msg}")
+    except Exception:
+        pass
+    
+    # 使用 Windows 原生 API 弹窗，保证即使 Qt 崩了也能看见报错
+    try:
+        ctypes.windll.user32.MessageBoxW(
+            0, 
+            f"程序遇到错误:\n\n{exc_value}\n\n详细崩溃日志已保存至 crash_log.txt", 
+            "数字报警 - 运行时错误", 
+            0x10 # MB_ICONERROR
+        )
+    except Exception:
+        pass
     sys.__excepthook__(exc_type, exc_value, exc_traceback)
 
 sys.excepthook = global_exception_handler
 
-# ---------- 2. Windows 高 DPI 兼容性设置 ----------
+# ---------- [4. Windows 高 DPI 兼容性设置] ----------
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(2)
 except Exception:
@@ -45,7 +69,6 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QRect
 from PyQt5.QtGui import QPainter, QPen, QColor, QIcon, QImage, QPixmap, QRegion
-from paddleocr import PaddleOCR
 from PIL import Image, ImageEnhance, ImageGrab
 import winsound
 
@@ -60,7 +83,7 @@ def get_icon_path():
             return path
     return None
 
-# ---------- 3. 高亮清晰框选器 (矢量高亮镂空) ----------
+# ---------- [5. 高亮清晰框选器 (矢量高亮镂空)] ----------
 class SnippingWidget(QWidget):
     region_selected = pyqtSignal(QRect)
 
@@ -108,7 +131,7 @@ class SnippingWidget(QWidget):
 
         overlay_color = QColor(0, 0, 0, 120)
 
-        # 2. 算镂空区域：只对框选之外的区域画暗色遮罩（保证选中的中间 100% 透明清晰）
+        # 2. 计算镂空区域：中间选中区域 100% 清晰透明
         if self.start_pos and self.end_pos:
             rect = QRect(self.start_pos, self.end_pos).normalized()
             if rect.width() > 0 and rect.height() > 0:
@@ -180,7 +203,7 @@ class SnippingWidget(QWidget):
         if event.key() == Qt.Key_Escape:
             self.hide()
 
-# ---------- 4. OCR 识别后台子线程 ----------
+# ---------- [6. OCR 识别后台子线程] ----------
 class OCRWorker(QThread):
     result_signal = pyqtSignal(list)
 
@@ -238,7 +261,7 @@ class OCRWorker(QThread):
     def stop(self):
         self.running = False
 
-# ---------- 5. 主窗口 ----------
+# ---------- [7. 主窗口] ----------
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -468,17 +491,24 @@ class MainWindow(QMainWindow):
                 self.table.item(row, 2).setText("未框选")
                 self.table.blockSignals(False)
 
-    # ---------- 6. 监控流程 ----------
+    # ---------- [8. 监控与动态加载流程] ----------
     def start_monitor(self):
         if all(r is None for r in self.regions):
             QMessageBox.warning(self, "提示", "请至少指定 1 个识别区域！")
             return
 
         if self.ocr is None:
-            self.log("正在初始化 OCR 引擎，请稍候...")
+            self.log("正在加载 PaddleOCR 核心引擎，请稍候...")
             QApplication.processEvents()
             
-            # 兼容降级初始化策略 (彻底兼容各个 Paddle 版本的传参机制)
+            # [关键] 延迟懒加载，避免软件启动时顶层加载导致打不开界面
+            try:
+                from paddleocr import PaddleOCR
+            except Exception as e:
+                QMessageBox.critical(self, "依赖缺失", f"无法加载 PaddleOCR 引擎:\n{e}\n\n请检查是否安装了 Visual C++ Redistributable 运行库。")
+                self.log(f"加载 PaddleOCR 失败: {e}")
+                return
+
             ocr_initialized = False
             last_err = ""
             
@@ -498,7 +528,7 @@ class MainWindow(QMainWindow):
                     last_err = str(e)
 
             if not ocr_initialized:
-                QMessageBox.critical(self, "错误", f"初始化 PaddleOCR 失败: {last_err}")
+                QMessageBox.critical(self, "初始化失败", f"初始化 PaddleOCR 失败: {last_err}")
                 return
 
             self.log("OCR 引擎初始化成功。")
@@ -670,7 +700,11 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.log(f"加载配置文件时遇到异常: {e}")
 
+# ---------- [9. 程序统一入口 (必须包含 freeze_support)] ----------
 if __name__ == "__main__":
+    # [最关键] 必须在第一句调用，防止 PyInstaller 多进程无限递归重启崩溃
+    multiprocessing.freeze_support()
+    
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
