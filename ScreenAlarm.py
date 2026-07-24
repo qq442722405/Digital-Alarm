@@ -2,11 +2,14 @@ import sys
 import os
 import multiprocessing
 
-# ---------- [1. 关键：OpenMP & Paddle 环境变量配置 (防止底层 OMP 冲突闪退)] ----------
+# ---------- [1. 关键：C++ 底层 & OpenMP 线程锁配置 (彻底解决内核加载闪退)] ----------
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 os.environ["FLAGS_allocator_strategy"] = "naive_best_fit"
+os.environ["OMP_NUM_THREADS"] = "1"        # 限制 C++ 线程数，防止多线程资源争抢崩溃
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
 
-# ---------- [2. 关键：完整 Stream 模拟 (彻底解决 --noconsole 模式下无 stdout 导致的崩溃)] ----------
+# ---------- [2. 关键：完整 Stream 模拟 (解决 --noconsole 无 stdout 导致的崩溃)] ----------
 class NullStream:
     def write(self, text): pass
     def flush(self): pass
@@ -38,7 +41,6 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
     except Exception:
         pass
     
-    # 使用 Windows 原生 API 弹窗，保证即使 Qt 崩了也能看见报错
     try:
         ctypes.windll.user32.MessageBoxW(
             0, 
@@ -125,13 +127,11 @@ class SnippingWidget(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        # 1. 绘制完整静态底图
         if self.bg_pixmap:
             painter.drawPixmap(0, 0, self.bg_pixmap)
 
         overlay_color = QColor(0, 0, 0, 120)
 
-        # 2. 计算镂空区域：中间选中区域 100% 清晰透明
         if self.start_pos and self.end_pos:
             rect = QRect(self.start_pos, self.end_pos).normalized()
             if rect.width() > 0 and rect.height() > 0:
@@ -143,11 +143,9 @@ class SnippingWidget(QWidget):
                 painter.fillRect(self.rect(), overlay_color)
                 painter.setClipping(False)
 
-                # 绘制红框边框
                 painter.setPen(QPen(QColor(255, 0, 0), 2, Qt.SolidLine))
                 painter.drawRect(rect)
 
-                # 绘制坐标提示
                 coord_text = f"X:{rect.x()} Y:{rect.y()} | W:{rect.width()} H:{rect.height()}"
                 text_y = max(20, rect.y() - 10)
                 
@@ -165,7 +163,6 @@ class SnippingWidget(QWidget):
         else:
             painter.fillRect(self.rect(), overlay_color)
 
-        # 3. 绘制顶部操作提示
         painter.setPen(QPen(Qt.white))
         font = painter.font()
         font.setPointSize(14)
@@ -491,32 +488,32 @@ class MainWindow(QMainWindow):
                 self.table.item(row, 2).setText("未框选")
                 self.table.blockSignals(False)
 
-    # ---------- [8. 监控与动态加载流程] ----------
+    # ---------- [8. 监控与安全延迟加载流程] ----------
     def start_monitor(self):
         if all(r is None for r in self.regions):
             QMessageBox.warning(self, "提示", "请至少指定 1 个识别区域！")
             return
 
         if self.ocr is None:
-            self.log("正在加载 PaddleOCR 核心引擎，请稍候...")
+            self.log("正在初始化安全纯净模式 OCR 内核，请稍候...")
             QApplication.processEvents()
             
-            # [关键] 延迟懒加载，避免软件启动时顶层加载导致打不开界面
             try:
                 from paddleocr import PaddleOCR
             except Exception as e:
-                QMessageBox.critical(self, "依赖缺失", f"无法加载 PaddleOCR 引擎:\n{e}\n\n请检查是否安装了 Visual C++ Redistributable 运行库。")
+                QMessageBox.critical(self, "依赖缺失", f"无法加载 PaddleOCR 库:\n{e}\n\n请确认目标电脑已安装 Visual C++ 运行库。")
                 self.log(f"加载 PaddleOCR 失败: {e}")
                 return
 
             ocr_initialized = False
             last_err = ""
             
+            # [关键] 强制关闭 mkldnn (防止 C++ 硬件加速崩溃)、关闭 GPU、关闭内部 log 输出
             init_configs = [
-                {"use_angle_cls": False, "lang": "ch"},
-                {"lang": "ch"},
-                {"ocr_version": "PP-OCRv4", "lang": "ch"},
-                {"ocr_version": "PP-OCRv3", "lang": "ch"}
+                {"use_angle_cls": False, "lang": "ch", "use_gpu": False, "show_log": False, "enable_mkldnn": False},
+                {"lang": "ch", "use_gpu": False, "show_log": False, "enable_mkldnn": False},
+                {"ocr_version": "PP-OCRv4", "lang": "ch", "use_gpu": False, "show_log": False, "enable_mkldnn": False},
+                {"ocr_version": "PP-OCRv3", "lang": "ch", "use_gpu": False, "show_log": False, "enable_mkldnn": False}
             ]
             
             for cfg in init_configs:
@@ -528,10 +525,10 @@ class MainWindow(QMainWindow):
                     last_err = str(e)
 
             if not ocr_initialized:
-                QMessageBox.critical(self, "初始化失败", f"初始化 PaddleOCR 失败: {last_err}")
+                QMessageBox.critical(self, "内核初始化失败", f"初始化 PaddleOCR 失败:\n{last_err}")
                 return
 
-            self.log("OCR 引擎初始化成功。")
+            self.log("OCR 安全纯净内核初始化成功。")
 
         self.alarm_value = self.edit_alarm_value.text().strip()
         self.comp_op = self.combo_comp_op.currentText()
@@ -700,9 +697,8 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.log(f"加载配置文件时遇到异常: {e}")
 
-# ---------- [9. 程序统一入口 (必须包含 freeze_support)] ----------
+# ---------- [9. 程序统一入口] ----------
 if __name__ == "__main__":
-    # [最关键] 必须在第一句调用，防止 PyInstaller 多进程无限递归重启崩溃
     multiprocessing.freeze_support()
     
     app = QApplication(sys.argv)
