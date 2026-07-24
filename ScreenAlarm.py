@@ -1,6 +1,14 @@
 import sys
-import json
 import os
+
+# ---------- [0. 必加防闪退补丁] ----------
+# 修复打包为 --noconsole 模式下，底层 PaddleOCR 试图输出 log 导致 sys.stdout 为 None 引起的静默闪退
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, 'w')
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, 'w')
+
+import json
 import traceback
 import logging
 import numpy as np
@@ -11,7 +19,7 @@ import ctypes
 logging.getLogger('ppocr').setLevel(logging.ERROR)
 logging.getLogger('paddle').setLevel(logging.ERROR)
 
-# ---------- 0. 全局防崩溃日志捕获 ----------
+# ---------- 1. 全局防崩溃日志捕获 ----------
 def global_exception_handler(exc_type, exc_value, exc_traceback):
     with open("crash_log.txt", "w", encoding="utf-8") as f:
         f.write(f"崩溃时间: {datetime.now()}\n")
@@ -20,7 +28,7 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
 
 sys.excepthook = global_exception_handler
 
-# ---------- 1. Windows 高 DPI 兼容性设置 ----------
+# ---------- 2. Windows 高 DPI 兼容性设置 ----------
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(2)
 except Exception:
@@ -52,7 +60,7 @@ def get_icon_path():
             return path
     return None
 
-# ---------- 2. 高亮清晰框选器 (矢量高亮镂空) ----------
+# ---------- 3. 高亮清晰框选器 (矢量高亮镂空) ----------
 class SnippingWidget(QWidget):
     region_selected = pyqtSignal(QRect)
 
@@ -94,13 +102,13 @@ class SnippingWidget(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        # 1. 先绘制完整静态底图
+        # 1. 绘制完整静态底图
         if self.bg_pixmap:
             painter.drawPixmap(0, 0, self.bg_pixmap)
 
         overlay_color = QColor(0, 0, 0, 120)
 
-        # 2. 计算镂空区域：只对框选之外的区域画暗色遮罩
+        # 2. 算镂空区域：只对框选之外的区域画暗色遮罩（保证选中的中间 100% 透明清晰）
         if self.start_pos and self.end_pos:
             rect = QRect(self.start_pos, self.end_pos).normalized()
             if rect.width() > 0 and rect.height() > 0:
@@ -112,7 +120,7 @@ class SnippingWidget(QWidget):
                 painter.fillRect(self.rect(), overlay_color)
                 painter.setClipping(False)
 
-                # 绘制红框
+                # 绘制红框边框
                 painter.setPen(QPen(QColor(255, 0, 0), 2, Qt.SolidLine))
                 painter.drawRect(rect)
 
@@ -134,7 +142,7 @@ class SnippingWidget(QWidget):
         else:
             painter.fillRect(self.rect(), overlay_color)
 
-        # 3. 绘制提示
+        # 3. 绘制顶部操作提示
         painter.setPen(QPen(Qt.white))
         font = painter.font()
         font.setPointSize(14)
@@ -172,7 +180,7 @@ class SnippingWidget(QWidget):
         if event.key() == Qt.Key_Escape:
             self.hide()
 
-# ---------- 3. OCR 识别后台子线程 ----------
+# ---------- 4. OCR 识别后台子线程 ----------
 class OCRWorker(QThread):
     result_signal = pyqtSignal(list)
 
@@ -230,7 +238,7 @@ class OCRWorker(QThread):
     def stop(self):
         self.running = False
 
-# ---------- 4. 主窗口 ----------
+# ---------- 5. 主窗口 ----------
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -470,7 +478,7 @@ class MainWindow(QMainWindow):
             self.log("正在初始化 OCR 引擎，请稍候...")
             QApplication.processEvents()
             
-            # 多重兼容降级初始化策略 (彻底解决各种版本的 Pipeline 报错问题)
+            # 兼容降级初始化策略 (彻底兼容各个 Paddle 版本的传参机制)
             ocr_initialized = False
             last_err = ""
             
