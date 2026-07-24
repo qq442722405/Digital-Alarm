@@ -2,14 +2,7 @@ import sys
 import os
 import multiprocessing
 
-# ---------- [1. 关键：C++ 底层 & OpenMP 线程锁配置 (彻底解决内核加载闪退)] ----------
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-os.environ["FLAGS_allocator_strategy"] = "naive_best_fit"
-os.environ["OMP_NUM_THREADS"] = "1"        # 限制 C++ 线程数，防止多线程资源争抢崩溃
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-
-# ---------- [2. 关键：完整 Stream 模拟 (解决 --noconsole 无 stdout 导致的崩溃)] ----------
+# ---------- [1. 关键：完整 Stream 模拟 (彻底解决 --noconsole 模式无 stdout 报错)] ----------
 class NullStream:
     def write(self, text): pass
     def flush(self): pass
@@ -28,11 +21,7 @@ import numpy as np
 from datetime import datetime
 import ctypes
 
-# 屏蔽 PaddleOCR / Paddle 内部输出的冗余调试日志
-logging.getLogger('ppocr').setLevel(logging.ERROR)
-logging.getLogger('paddle').setLevel(logging.ERROR)
-
-# ---------- [3. 全局防崩溃日志捕获 + Win32 原生弹窗] ----------
+# ---------- [2. 全局防崩溃日志捕获 + Win32 原生弹窗] ----------
 def global_exception_handler(exc_type, exc_value, exc_traceback):
     err_msg = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
     try:
@@ -54,7 +43,7 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
 
 sys.excepthook = global_exception_handler
 
-# ---------- [4. Windows 高 DPI 兼容性设置] ----------
+# ---------- [3. Windows 高 DPI 兼容性设置] ----------
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(2)
 except Exception:
@@ -67,7 +56,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTableWidget, QTableWidgetItem, QComboBox, QCheckBox,
     QLineEdit, QLabel, QTextEdit, QGroupBox, QMessageBox,
-    QSlider, QDoubleSpinBox
+    QSlider, QDoubleSpinBox, QFileDialog
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QRect
 from PyQt5.QtGui import QPainter, QPen, QColor, QIcon, QImage, QPixmap, QRegion
@@ -85,7 +74,7 @@ def get_icon_path():
             return path
     return None
 
-# ---------- [5. 高亮清晰框选器 (矢量高亮镂空)] ----------
+# ---------- [4. 高亮清晰框选器 (矢量高亮镂空)] ----------
 class SnippingWidget(QWidget):
     region_selected = pyqtSignal(QRect)
 
@@ -200,14 +189,14 @@ class SnippingWidget(QWidget):
         if event.key() == Qt.Key_Escape:
             self.hide()
 
-# ---------- [6. OCR 识别后台子线程] ----------
+# ---------- [5. ONNX 识别后台子线程] ----------
 class OCRWorker(QThread):
     result_signal = pyqtSignal(list)
 
-    def __init__(self, regions, ocr, sharpness=0, scale=1.0, keep_digits_only=True):
+    def __init__(self, regions, ocr_engine, sharpness=0, scale=1.0, keep_digits_only=True):
         super().__init__()
         self.regions = regions
-        self.ocr = ocr
+        self.ocr_engine = ocr_engine
         self.sharpness = sharpness
         self.scale = scale
         self.keep_digits_only = keep_digits_only
@@ -238,9 +227,11 @@ class OCRWorker(QThread):
                     img_pil = ImageGrab.grab(bbox=bbox)
                     img_pil = self.preprocess(img_pil)
 
-                    ocr_result = self.ocr.ocr(np.array(img_pil), cls=False)
-                    if ocr_result and ocr_result[0]:
-                        text = " ".join([line[1][0] for line in ocr_result[0]])
+                    # RapidOCR 识别调用: 返回 (result, elapse)
+                    # result 结构: [[[x,y...], "识别文本", "置信度"], ...]
+                    ocr_result, _ = self.ocr_engine(np.array(img_pil))
+                    if ocr_result:
+                        text = " ".join([line[1] for line in ocr_result])
                     else:
                         text = ""
                 except Exception:
@@ -258,12 +249,12 @@ class OCRWorker(QThread):
     def stop(self):
         self.running = False
 
-# ---------- [7. 主窗口] ----------
+# ---------- [6. 主窗口] ----------
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("数字屏幕监控报警工具")
-        self.setGeometry(100, 100, 1050, 750)
+        self.setWindowTitle("数字屏幕监控报警工具 (ONNX 高速版)")
+        self.setGeometry(100, 100, 1050, 800)
 
         ico_path = get_icon_path()
         if ico_path:
@@ -275,7 +266,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-        self.ocr = None
+        self.ocr_engine = None
         self.config_file = "config.json"
         self.regions = [None] * 10
         self.alarm_value = ""
@@ -313,7 +304,25 @@ class MainWindow(QMainWindow):
         btn_layout.addWidget(self.btn_load)
         main_layout.addLayout(btn_layout)
 
-        # 2. 报警条件
+        # 2. 模型设置 (支持内置与自定义本地 ONNX 模型)
+        model_group = QGroupBox("OCR 模型与内核设置 (ONNX)")
+        model_layout = QHBoxLayout(model_group)
+        
+        self.check_custom_model = QCheckBox("使用自定义本地 ONNX 模型")
+        self.edit_rec_model_path = QLineEdit()
+        self.edit_rec_model_path.setPlaceholderText("可不填，默认使用内置超轻量模型")
+        self.btn_select_model = QPushButton("选择文件...")
+        self.btn_select_model.setEnabled(False)
+
+        self.check_custom_model.toggled.connect(lambda checked: self.btn_select_model.setEnabled(checked))
+        self.btn_select_model.clicked.connect(self.select_local_model)
+
+        model_layout.addWidget(self.check_custom_model)
+        model_layout.addWidget(self.edit_rec_model_path)
+        model_layout.addWidget(self.btn_select_model)
+        main_layout.addWidget(model_group)
+
+        # 3. 报警条件
         alarm_group = QGroupBox("报警条件设置")
         alarm_layout = QHBoxLayout(alarm_group)
         alarm_layout.addWidget(QLabel("报警数值:"))
@@ -328,7 +337,7 @@ class MainWindow(QMainWindow):
         alarm_layout.addStretch()
         main_layout.addWidget(alarm_group)
 
-        # 3. 区域表格
+        # 4. 区域表格
         self.table = QTableWidget(10, 5)
         self.table.setHorizontalHeaderLabels(["行号", "操作", "区域坐标 X, Y, W, H (可手动修改)", "实时识别值", "状态"])
         self.table.horizontalHeader().setStretchLastSection(True)
@@ -358,7 +367,7 @@ class MainWindow(QMainWindow):
         self.table.itemChanged.connect(self.on_table_item_changed)
         main_layout.addWidget(self.table)
 
-        # 4. 报警声音设置
+        # 5. 报警声音设置
         sound_group = QGroupBox("报警声音设置")
         sound_layout = QHBoxLayout(sound_group)
         sound_layout.addWidget(QLabel("系统声音:"))
@@ -377,7 +386,7 @@ class MainWindow(QMainWindow):
         sound_layout.addStretch()
         main_layout.addWidget(sound_group)
 
-        # 5. 图像预处理
+        # 6. 图像预处理
         preproc_group = QGroupBox("图像预处理")
         preproc_layout = QHBoxLayout(preproc_group)
         preproc_layout.addWidget(QLabel("锐化强度:"))
@@ -403,7 +412,7 @@ class MainWindow(QMainWindow):
         preproc_layout.addStretch()
         main_layout.addWidget(preproc_group)
 
-        # 6. 日志
+        # 7. 日志
         log_group = QGroupBox("报警日志")
         log_layout = QVBoxLayout(log_group)
         count_layout = QHBoxLayout()
@@ -424,6 +433,11 @@ class MainWindow(QMainWindow):
         self.btn_load.clicked.connect(self.load_config)
         self.btn_test_sound.clicked.connect(self.test_sound)
         self.slider_sharpness.valueChanged.connect(lambda v: self.label_sharpness_val.setText(str(v)))
+
+    def select_local_model(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "选择 ONNX 识别模型文件", "", "ONNX Models (*.onnx)")
+        if file_path:
+            self.edit_rec_model_path.setText(file_path)
 
     def quit_app(self):
         self.stop_monitor()
@@ -488,47 +502,34 @@ class MainWindow(QMainWindow):
                 self.table.item(row, 2).setText("未框选")
                 self.table.blockSignals(False)
 
-    # ---------- [8. 监控与安全延迟加载流程] ----------
+    # ---------- [7. 监控与 ONNX 动态加载流程] ----------
     def start_monitor(self):
         if all(r is None for r in self.regions):
             QMessageBox.warning(self, "提示", "请至少指定 1 个识别区域！")
             return
 
-        if self.ocr is None:
-            self.log("正在初始化安全纯净模式 OCR 内核，请稍候...")
+        if self.ocr_engine is None:
+            self.log("正在初始化 ONNX 高速识别内核...")
             QApplication.processEvents()
             
             try:
-                from paddleocr import PaddleOCR
+                from rapidocr_onnxruntime import RapidOCR
             except Exception as e:
-                QMessageBox.critical(self, "依赖缺失", f"无法加载 PaddleOCR 库:\n{e}\n\n请确认目标电脑已安装 Visual C++ 运行库。")
-                self.log(f"加载 PaddleOCR 失败: {e}")
+                QMessageBox.critical(self, "环境缺失", f"无法导入 RapidOCR 引擎库:\n{e}\n\n请确认已安装 rapidocr_onnxruntime 依赖。")
+                self.log(f"加载 RapidOCR 库失败: {e}")
                 return
 
-            ocr_initialized = False
-            last_err = ""
-            
-            # [关键] 强制关闭 mkldnn (防止 C++ 硬件加速崩溃)、关闭 GPU、关闭内部 log 输出
-            init_configs = [
-                {"use_angle_cls": False, "lang": "ch", "use_gpu": False, "show_log": False, "enable_mkldnn": False},
-                {"lang": "ch", "use_gpu": False, "show_log": False, "enable_mkldnn": False},
-                {"ocr_version": "PP-OCRv4", "lang": "ch", "use_gpu": False, "show_log": False, "enable_mkldnn": False},
-                {"ocr_version": "PP-OCRv3", "lang": "ch", "use_gpu": False, "show_log": False, "enable_mkldnn": False}
-            ]
-            
-            for cfg in init_configs:
-                try:
-                    self.ocr = PaddleOCR(**cfg)
-                    ocr_initialized = True
-                    break
-                except Exception as e:
-                    last_err = str(e)
-
-            if not ocr_initialized:
-                QMessageBox.critical(self, "内核初始化失败", f"初始化 PaddleOCR 失败:\n{last_err}")
+            try:
+                custom_path = self.edit_rec_model_path.text().strip()
+                if self.check_custom_model.isChecked() and custom_path and os.path.exists(custom_path):
+                    self.ocr_engine = RapidOCR(rec_model_path=custom_path)
+                    self.log(f"已加载自定义本地模型: {custom_path}")
+                else:
+                    self.ocr_engine = RapidOCR()
+                    self.log("已加载内置超轻量 ONNX 高速引擎。")
+            except Exception as e:
+                QMessageBox.critical(self, "内核初始化失败", f"初始化 ONNX 引擎出错:\n{e}")
                 return
-
-            self.log("OCR 安全纯净内核初始化成功。")
 
         self.alarm_value = self.edit_alarm_value.text().strip()
         self.comp_op = self.combo_comp_op.currentText()
@@ -538,7 +539,7 @@ class MainWindow(QMainWindow):
             self.ocr_thread.wait()
 
         self.ocr_thread = OCRWorker(
-            self.regions, self.ocr,
+            self.regions, self.ocr_engine,
             sharpness=self.slider_sharpness.value(),
             scale=self.spin_scale.value(),
             keep_digits_only=self.check_digits_only.isChecked()
@@ -647,7 +648,9 @@ class MainWindow(QMainWindow):
             "sharpness": self.slider_sharpness.value(),
             "scale": self.spin_scale.value(),
             "keep_digits_only": self.check_digits_only.isChecked(),
-            "total_alarm_count": self.total_alarm_count
+            "total_alarm_count": self.total_alarm_count,
+            "use_custom_model": self.check_custom_model.isChecked(),
+            "rec_model_path": self.edit_rec_model_path.text()
         }
         for rect in self.regions:
             if rect:
@@ -694,10 +697,13 @@ class MainWindow(QMainWindow):
             self.check_digits_only.setChecked(config.get("keep_digits_only", True))
             self.total_alarm_count = config.get("total_alarm_count", 0)
             self.label_alarm_count.setText(str(self.total_alarm_count))
+            
+            self.check_custom_model.setChecked(config.get("use_custom_model", False))
+            self.edit_rec_model_path.setText(config.get("rec_model_path", ""))
         except Exception as e:
             self.log(f"加载配置文件时遇到异常: {e}")
 
-# ---------- [9. 程序统一入口] ----------
+# ---------- [8. 程序统一入口] ----------
 if __name__ == "__main__":
     multiprocessing.freeze_support()
     
