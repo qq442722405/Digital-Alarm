@@ -21,12 +21,15 @@ jobs:
 
     - name: Install Dependencies
       run: |
-        python -m pip install --upgrade pip
+        python -m pip install --upgrade pip setuptools wheel
+        # 强制安装 PyMuPDF 的 预编译二进制包（解决 devenv.com 报错）
+        pip install "PyMuPDF>=1.23.0" --only-binary PyMuPDF
+        # 安装项目主依赖
         pip install "numpy<2" paddlepaddle==2.6.2 paddleocr==2.7.0.0 PyQt5 Pillow imgaug pyclipper shapely lmdb pyinstaller
 
     - name: Build EXE with PyInstaller
       run: |
-        # 获取 paddleocr 安装路径并定位 ppocr 文件夹，将其复制进打包路径
+        # 获取 paddleocr 安装路径并定位 ppocr 文件夹，将其打包进 EXE
         $PADDLE_DIR = python -c "import paddleocr, os; print(os.path.dirname(paddleocr.__file__))"
         $PPOCR_DIR = Join-Path $PADDLE_DIR "ppocr"
         
