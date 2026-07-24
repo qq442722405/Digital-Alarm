@@ -2,6 +2,14 @@ import sys
 import os
 import multiprocessing
 
+# ---------- [0. 核心修复：防止 Paddle C++ 底层冲突导致静默闪退] ----------
+# 1. 解决 Intel MKL / OpenMP 多重加载导致的 C++ 静默崩溃
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+# 2. 禁用 Paddle C++ 底层 glog 日志（防止在无控制台模式下因写 stdout 崩溃）
+os.environ["GLOG_minloglevel"] = "3"
+# 3. 禁用 OMP 警告输出
+os.environ["OMP_NUM_THREADS"] = "1"
+
 # ---------- [1. 关键：完整 Stream 模拟 (彻底解决 --noconsole 模式无 stdout 报错)] ----------
 class NullStream:
     def write(self, text): pass
@@ -227,7 +235,6 @@ class OCRWorker(QThread):
                     img_pil = ImageGrab.grab(bbox=bbox)
                     img_pil = self.preprocess(img_pil)
 
-                    # PaddleOCR 识别调用
                     img_np = np.array(img_pil)
                     ocr_res = self.ocr_engine.ocr(img_np, cls=False)
                     if ocr_res and ocr_res[0]:
@@ -304,13 +311,13 @@ class MainWindow(QMainWindow):
         btn_layout.addWidget(self.btn_load)
         main_layout.addLayout(btn_layout)
 
-        # 2. 模型设置 (支持自定义本地 Paddle 识别模型目录)
+        # 2. 模型设置
         model_group = QGroupBox("OCR 模型与内核设置 (PaddleOCR)")
         model_layout = QHBoxLayout(model_group)
         
         self.check_custom_model = QCheckBox("使用自定义本地识别模型目录 (rec_model_dir)")
         self.edit_rec_model_path = QLineEdit()
-        self.edit_rec_model_path.setPlaceholderText("可不填，默认自动下载官方轻量英文/数字模型")
+        self.edit_rec_model_path.setPlaceholderText("可不填，默认使用轻量英文/数字模型")
         self.btn_select_model = QPushButton("选择文件夹...")
         self.btn_select_model.setEnabled(False)
 
@@ -502,33 +509,46 @@ class MainWindow(QMainWindow):
                 self.table.item(row, 2).setText("未框选")
                 self.table.blockSignals(False)
 
-    # ---------- [7. 监控与 PaddleOCR 动态加载流程] ----------
+    # ---------- [7. 安全初始化 PaddleOCR] ----------
     def start_monitor(self):
         if all(r is None for r in self.regions):
             QMessageBox.warning(self, "提示", "请至少指定 1 个识别区域！")
             return
 
         if self.ocr_engine is None:
-            self.log("正在初始化 PaddleOCR 引擎，请稍候...")
+            self.log("正在初始化 PaddleOCR 内核（首次运行可能需要几秒钟下载预训练模型）...")
             QApplication.processEvents()
             
             try:
                 from paddleocr import PaddleOCR
             except Exception as e:
-                QMessageBox.critical(self, "环境缺失", f"无法导入 PaddleOCR 库:\n{e}\n\n请确认已安装 paddlepaddle 和 paddleocr 依赖。")
+                QMessageBox.critical(self, "环境缺失", f"无法导入 PaddleOCR 库:\n{e}\n\n请确认已安装 paddlepaddle 和 paddleocr。")
                 self.log(f"加载 PaddleOCR 库失败: {e}")
                 return
 
             try:
                 custom_dir = self.edit_rec_model_path.text().strip()
+                # 显式关闭 use_angle_cls 减少 C++ 线程开销
                 if self.check_custom_model.isChecked() and custom_dir and os.path.exists(custom_dir):
-                    self.ocr_engine = PaddleOCR(rec_model_dir=custom_dir, lang='en', show_log=False, use_gpu=False)
-                    self.log(f"已加载自定义 PaddleOCR 模型目录: {custom_dir}")
+                    self.ocr_engine = PaddleOCR(
+                        rec_model_dir=custom_dir,
+                        lang='en',
+                        show_log=False,
+                        use_gpu=False,
+                        use_angle_cls=False
+                    )
+                    self.log(f"已加载自定义 PaddleOCR 模型: {custom_dir}")
                 else:
-                    self.ocr_engine = PaddleOCR(lang='en', show_log=False, use_gpu=False)
-                    self.log("已加载标准 PaddleOCR 内核 (英文/数字模式)。")
+                    self.ocr_engine = PaddleOCR(
+                        lang='en',
+                        show_log=False,
+                        use_gpu=False,
+                        use_angle_cls=False
+                    )
+                    self.log("已成功加载标准 PaddleOCR 高速内核。")
             except Exception as e:
-                QMessageBox.critical(self, "内核初始化失败", f"初始化 PaddleOCR 出错:\n{e}")
+                QMessageBox.critical(self, "初始化失败", f"初始化 PaddleOCR 时发生错误:\n{e}")
+                self.log(f"初始化错误: {e}")
                 return
 
         self.alarm_value = self.edit_alarm_value.text().strip()
