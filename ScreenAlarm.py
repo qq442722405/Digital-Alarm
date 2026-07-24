@@ -189,7 +189,7 @@ class SnippingWidget(QWidget):
         if event.key() == Qt.Key_Escape:
             self.hide()
 
-# ---------- [5. ONNX 识别后台子线程] ----------
+# ---------- [5. PaddleOCR 识别后台子线程] ----------
 class OCRWorker(QThread):
     result_signal = pyqtSignal(list)
 
@@ -227,11 +227,11 @@ class OCRWorker(QThread):
                     img_pil = ImageGrab.grab(bbox=bbox)
                     img_pil = self.preprocess(img_pil)
 
-                    # RapidOCR 识别调用: 返回 (result, elapse)
-                    # result 结构: [[[x,y...], "识别文本", "置信度"], ...]
-                    ocr_result, _ = self.ocr_engine(np.array(img_pil))
-                    if ocr_result:
-                        text = " ".join([line[1] for line in ocr_result])
+                    # PaddleOCR 识别调用
+                    img_np = np.array(img_pil)
+                    ocr_res = self.ocr_engine.ocr(img_np, cls=False)
+                    if ocr_res and ocr_res[0]:
+                        text = " ".join([line[1][0] for line in ocr_res[0]])
                     else:
                         text = ""
                 except Exception:
@@ -253,7 +253,7 @@ class OCRWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("数字屏幕监控报警工具 (ONNX 高速版)")
+        self.setWindowTitle("数字屏幕监控报警工具 (PaddleOCR 版)")
         self.setGeometry(100, 100, 1050, 800)
 
         ico_path = get_icon_path()
@@ -304,14 +304,14 @@ class MainWindow(QMainWindow):
         btn_layout.addWidget(self.btn_load)
         main_layout.addLayout(btn_layout)
 
-        # 2. 模型设置 (支持内置与自定义本地 ONNX 模型)
-        model_group = QGroupBox("OCR 模型与内核设置 (ONNX)")
+        # 2. 模型设置 (支持自定义本地 Paddle 识别模型目录)
+        model_group = QGroupBox("OCR 模型与内核设置 (PaddleOCR)")
         model_layout = QHBoxLayout(model_group)
         
-        self.check_custom_model = QCheckBox("使用自定义本地 ONNX 模型")
+        self.check_custom_model = QCheckBox("使用自定义本地识别模型目录 (rec_model_dir)")
         self.edit_rec_model_path = QLineEdit()
-        self.edit_rec_model_path.setPlaceholderText("可不填，默认使用内置超轻量模型")
-        self.btn_select_model = QPushButton("选择文件...")
+        self.edit_rec_model_path.setPlaceholderText("可不填，默认自动下载官方轻量英文/数字模型")
+        self.btn_select_model = QPushButton("选择文件夹...")
         self.btn_select_model.setEnabled(False)
 
         self.check_custom_model.toggled.connect(lambda checked: self.btn_select_model.setEnabled(checked))
@@ -435,9 +435,9 @@ class MainWindow(QMainWindow):
         self.slider_sharpness.valueChanged.connect(lambda v: self.label_sharpness_val.setText(str(v)))
 
     def select_local_model(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "选择 ONNX 识别模型文件", "", "ONNX Models (*.onnx)")
-        if file_path:
-            self.edit_rec_model_path.setText(file_path)
+        dir_path = QFileDialog.getExistingDirectory(self, "选择 PaddleOCR 识别模型文件夹 (rec_model_dir)")
+        if dir_path:
+            self.edit_rec_model_path.setText(dir_path)
 
     def quit_app(self):
         self.stop_monitor()
@@ -502,33 +502,33 @@ class MainWindow(QMainWindow):
                 self.table.item(row, 2).setText("未框选")
                 self.table.blockSignals(False)
 
-    # ---------- [7. 监控与 ONNX 动态加载流程] ----------
+    # ---------- [7. 监控与 PaddleOCR 动态加载流程] ----------
     def start_monitor(self):
         if all(r is None for r in self.regions):
             QMessageBox.warning(self, "提示", "请至少指定 1 个识别区域！")
             return
 
         if self.ocr_engine is None:
-            self.log("正在初始化 ONNX 高速识别内核...")
+            self.log("正在初始化 PaddleOCR 引擎，请稍候...")
             QApplication.processEvents()
             
             try:
-                from rapidocr_onnxruntime import RapidOCR
+                from paddleocr import PaddleOCR
             except Exception as e:
-                QMessageBox.critical(self, "环境缺失", f"无法导入 RapidOCR 引擎库:\n{e}\n\n请确认已安装 rapidocr_onnxruntime 依赖。")
-                self.log(f"加载 RapidOCR 库失败: {e}")
+                QMessageBox.critical(self, "环境缺失", f"无法导入 PaddleOCR 库:\n{e}\n\n请确认已安装 paddlepaddle 和 paddleocr 依赖。")
+                self.log(f"加载 PaddleOCR 库失败: {e}")
                 return
 
             try:
-                custom_path = self.edit_rec_model_path.text().strip()
-                if self.check_custom_model.isChecked() and custom_path and os.path.exists(custom_path):
-                    self.ocr_engine = RapidOCR(rec_model_path=custom_path)
-                    self.log(f"已加载自定义本地模型: {custom_path}")
+                custom_dir = self.edit_rec_model_path.text().strip()
+                if self.check_custom_model.isChecked() and custom_dir and os.path.exists(custom_dir):
+                    self.ocr_engine = PaddleOCR(rec_model_dir=custom_dir, lang='en', show_log=False, use_gpu=False)
+                    self.log(f"已加载自定义 PaddleOCR 模型目录: {custom_dir}")
                 else:
-                    self.ocr_engine = RapidOCR()
-                    self.log("已加载内置超轻量 ONNX 高速引擎。")
+                    self.ocr_engine = PaddleOCR(lang='en', show_log=False, use_gpu=False)
+                    self.log("已加载标准 PaddleOCR 内核 (英文/数字模式)。")
             except Exception as e:
-                QMessageBox.critical(self, "内核初始化失败", f"初始化 ONNX 引擎出错:\n{e}")
+                QMessageBox.critical(self, "内核初始化失败", f"初始化 PaddleOCR 出错:\n{e}")
                 return
 
         self.alarm_value = self.edit_alarm_value.text().strip()

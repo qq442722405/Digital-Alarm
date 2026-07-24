@@ -1,5 +1,7 @@
 PyQt5==5.15.10
 Pillow==10.3.0
 numpy<2.0.0
-rapidocr_onnxruntime
+paddlepaddle
+paddleocr
+opencv-python
 pyinstaller==6.5.0
