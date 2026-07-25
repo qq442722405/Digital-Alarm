@@ -16,19 +16,24 @@ jobs:
     - name: 配置 Python 环境
       uses: actions/setup-python@v5
       with:
-        python-version: '3.10' # 3.10 对 PaddleOCR 和 PyQt5 兼容性最好
-        cache: 'pip' # 开启依赖缓存，提升后续构建速度
+        python-version: '3.10' # 使用 3.10，避免 3.11 编译 PyMuPDF 失败
+        cache: 'pip'          # 开启依赖缓存，大幅加快打包速度
 
     - name: 安装依赖
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip install pyinstaller
 
     - name: 使用 PyInstaller 打包
       run: |
-        # 修正：将入口文件名从 main.py 改为 ScreenAlarm.py
-        pyinstaller --noconsole --onefile --collect-all paddleocr --collect-all paddle --add-data "1.ico;." --name "ScreenMonitorAlarm" ScreenAlarm.py
+        pyinstaller --noconsole --onefile `
+          --collect-all paddleocr `
+          --collect-all paddle `
+          --collect-binaries paddle `
+          --collect-data paddleocr `
+          --add-data "1.ico;." `
+          --name "ScreenMonitorAlarm" `
+          ScreenAlarm.py
 
     - name: 上传生成的 EXE 成果物
       uses: actions/upload-artifact@v4
