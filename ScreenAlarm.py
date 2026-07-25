@@ -1,213 +1,112 @@
 import sys
-import os
-import multiprocessing
-
-# ---------- [0. 核心修正：PyInstaller 打包解包路径修复] ----------
-if getattr(sys, 'frozen', False):
-    base_path = sys._MEIPASS
-    os.environ['PATH'] = base_path + os.pathsep + os.environ.get('PATH', '')
-    if base_path not in sys.path:
-        sys.path.insert(0, base_path)
-
-# ---------- [1. 关键：完整 Stream 模拟 (彻底解决 --noconsole 模式无 stdout 报错)] ----------
-class NullStream:
-    def write(self, text): pass
-    def flush(self): pass
-    def isatty(self): return False
-    def writelines(self, lines): pass
-
-if sys.stdout is None or not hasattr(sys.stdout, 'write'):
-    sys.stdout = NullStream()
-if sys.stderr is None or not hasattr(sys.stderr, 'write'):
-    sys.stderr = NullStream()
-
 import json
-import traceback
-import logging
+import os
 import numpy as np
 from datetime import datetime
-import ctypes
-
-# ---------- [2. 全局防崩溃日志捕获 + Win32 原生弹窗] ----------
-def global_exception_handler(exc_type, exc_value, exc_traceback):
-    err_msg = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
-    try:
-        with open("crash_log.txt", "w", encoding="utf-8") as f:
-            f.write(f"崩溃时间: {datetime.now()}\n\n{err_msg}")
-    except Exception:
-        pass
-    
-    try:
-        ctypes.windll.user32.MessageBoxW(
-            0, 
-            f"程序遇到错误:\n\n{exc_value}\n\n详细崩溃日志已保存至 crash_log.txt", 
-            "数字报警 - 运行时错误", 
-            0x10 # MB_ICONERROR
-        )
-    except Exception:
-        pass
-    sys.__excepthook__(exc_type, exc_value, exc_traceback)
-
-sys.excepthook = global_exception_handler
-
-# ---------- [3. Windows 高 DPI 兼容性设置] ----------
-try:
-    ctypes.windll.shcore.SetProcessDpiAwareness(2)
-except Exception:
-    try:
-        ctypes.windll.user32.SetProcessDPIAware()
-    except Exception:
-        pass
-
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTableWidget, QTableWidgetItem, QComboBox, QCheckBox,
-    QLineEdit, QLabel, QTextEdit, QGroupBox, QMessageBox,
-    QSlider, QDoubleSpinBox, QFileDialog
+    QLineEdit, QLabel, QFileDialog, QTextEdit, QGroupBox, QGridLayout,
+    QMessageBox, QSystemTrayIcon, QMenu, QAction, QStyle, QSlider, QDoubleSpinBox,
+    QButtonGroup, QRadioButton, QHeaderView, QAbstractItemView
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QRect
-from PyQt5.QtGui import QPainter, QPen, QColor, QIcon, QImage, QPixmap, QRegion
-from PIL import Image, ImageEnhance, ImageGrab
+from PyQt5.QtGui import QPainter, QPen, QColor, QIcon
+import ctypes
 import winsound
 
-def get_icon_path():
-    if getattr(sys, 'frozen', False):
-        base_path = sys._MEIPASS
-    else:
-        base_path = os.path.dirname(os.path.abspath(__file__))
-    for name in ["1.ICO", "1.ico"]:
-        path = os.path.join(base_path, name)
-        if os.path.exists(path):
-            return path
-    return None
+# 动态导入 PaddleOCR，避免打包前导入失败
+try:
+    from paddleocr import PaddleOCR
+    PADDLEOCR_READY = True
+except Exception:
+    PADDLEOCR_READY = False
 
-# ---------- [4. 高亮清晰框选器 (矢量高亮镂空)] ----------
-class SnippingWidget(QWidget):
+from PIL import Image, ImageEnhance
+
+# ------------------- 区域选择器（左上→右下） -------------------
+class RegionSelector(QWidget):
     region_selected = pyqtSignal(QRect)
 
     def __init__(self):
         super().__init__()
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.showFullScreen()
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setStyleSheet("background:transparent;")
         self.setCursor(Qt.CrossCursor)
-        
-        self.start_pos = None
-        self.end_pos = None
-        self.is_selecting = False
-        self.bg_pixmap = None
-        self.tip_text = ""
-
-    def start_snipping(self, tip_text=""):
-        self.tip_text = tip_text
-        self.start_pos = None
-        self.end_pos = None
-        self.is_selecting = False
-        
-        try:
-            try:
-                img_pil = ImageGrab.grab(all_screens=True).convert("RGB")
-            except Exception:
-                img_pil = ImageGrab.grab().convert("RGB")
-                
-            data = img_pil.tobytes("raw", "RGB")
-            qimg = QImage(data, img_pil.width, img_pil.height, 3 * img_pil.width, QImage.Format_RGB888)
-            self.bg_pixmap = QPixmap.fromImage(qimg)
-            self.setGeometry(0, 0, img_pil.width, img_pil.height)
-        except Exception as e:
-            QMessageBox.critical(None, "截图失败", f"无法获取屏幕截图: {e}")
-            return
-
-        self.show()
-        self.activateWindow()
+        self.first_point = None
+        self.second_point = None
+        self.rect = None
 
     def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-
-        if self.bg_pixmap:
-            painter.drawPixmap(0, 0, self.bg_pixmap)
-
-        overlay_color = QColor(0, 0, 0, 120)
-
-        if self.start_pos and self.end_pos:
-            rect = QRect(self.start_pos, self.end_pos).normalized()
-            if rect.width() > 0 and rect.height() > 0:
-                full_region = QRegion(self.rect())
-                selected_region = QRegion(rect)
-                dim_region = full_region.subtracted(selected_region)
-
-                painter.setClipRegion(dim_region)
-                painter.fillRect(self.rect(), overlay_color)
-                painter.setClipping(False)
-
-                painter.setPen(QPen(QColor(255, 0, 0), 2, Qt.SolidLine))
-                painter.drawRect(rect)
-
-                coord_text = f"X:{rect.x()} Y:{rect.y()} | W:{rect.width()} H:{rect.height()}"
-                text_y = max(20, rect.y() - 10)
-                
-                painter.setPen(Qt.NoPen)
-                painter.setBrush(QColor(0, 0, 0, 180))
-                painter.drawRect(rect.x(), text_y - 15, 230, 20)
-                
-                painter.setPen(QPen(QColor(255, 255, 0)))
-                font = painter.font()
-                font.setPointSize(10)
-                painter.setFont(font)
-                painter.drawText(rect.x() + 5, text_y, coord_text)
-            else:
-                painter.fillRect(self.rect(), overlay_color)
-        else:
-            painter.fillRect(self.rect(), overlay_color)
-
-        painter.setPen(QPen(Qt.white))
-        font = painter.font()
-        font.setPointSize(14)
-        font.setBold(True)
-        painter.setFont(font)
-        painter.drawText(50, 50, f"{self.tip_text} (按 ESC 退出框选)")
+        if self.rect:
+            painter = QPainter(self)
+            painter.setPen(QPen(QColor(255, 0, 0), 2, Qt.SolidLine))
+            painter.setBrush(QColor(255, 0, 0, 50))
+            painter.drawRect(self.rect)
+        elif self.first_point:
+            painter = QPainter(self)
+            painter.setPen(QPen(QColor(255, 0, 0), 2, Qt.DashLine))
+            painter.drawLine(self.first_point.x()-10, self.first_point.y(),
+                             self.first_point.x()+10, self.first_point.y())
+            painter.drawLine(self.first_point.x(), self.first_point.y()-10,
+                             self.first_point.x(), self.first_point.y()+10)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            self.start_pos = event.pos()
-            self.end_pos = event.pos()
-            self.is_selecting = True
-            self.update()
-
-    def mouseMoveEvent(self, event):
-        if self.is_selecting:
-            self.end_pos = event.pos()
-            self.update()
-
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton and self.is_selecting:
-            self.is_selecting = False
-            self.end_pos = event.pos()
-            rect = QRect(self.start_pos, self.end_pos).normalized()
-
-            if rect.width() > 5 and rect.height() > 5:
-                self.region_selected.emit(rect)
-                self.hide()
-            else:
-                self.start_pos = None
-                self.end_pos = None
+            if not self.first_point:
+                self.first_point = event.pos()
                 self.update()
+            elif not self.second_point:
+                self.second_point = event.pos()
+                self.rect = QRect(self.first_point, self.second_point).normalized()
+                self.update()
+                if self.rect.width() > 5 and self.rect.height() > 5:
+                    self.region_selected.emit(self.rect)
+                    self.hide()
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
+            self.first_point = None
+            self.second_point = None
+            self.rect = None
+            self.update()
             self.hide()
 
-# ---------- [5. PaddleOCR 识别后台子线程] ----------
-class OCRWorker(QThread):
-    result_signal = pyqtSignal(list)
+# ------------------- 检测行数据结构 -------------------
+class DetectRow:
+    def __init__(self, rect=None, alarm_value="", comp_op="="):
+        self.rect = rect          # QRect
+        self.alarm_value = alarm_value  # str
+        self.comp_op = comp_op    # "=", ">", "<", "≥", "≤"
+        self.current_text = ""    # 当前识别文本
+        self.state = "正常"       # 正常/报警/疑似...
+        self.debounce = 0
+        self.enabled = True       # 是否启用检测（默认启用）
 
-    def __init__(self, regions, ocr_engine, sharpness=0, scale=1.0, keep_digits_only=True):
+# ------------------- OCR 检测线程（逐行循环） -------------------
+class DetectWorker(QThread):
+    update_result = pyqtSignal(int, str, str)   # row_index, current_text, state
+    alarm_triggered = pyqtSignal(int)           # 某行触发报警
+
+    def __init__(self, rows, sharpness=0, scale=1.0, keep_digits_only=True, interval=500):
         super().__init__()
-        self.regions = regions
-        self.ocr_engine = ocr_engine
+        self.rows = rows            # list of DetectRow
         self.sharpness = sharpness
         self.scale = scale
         self.keep_digits_only = keep_digits_only
+        self.interval = interval    # 每行检测间隔（毫秒）
         self.running = False
+        self.ocr = None
+
+    def init_ocr(self):
+        if not PADDLEOCR_READY:
+            raise RuntimeError("PaddleOCR 不可用")
+        try:
+            self.ocr = PaddleOCR(lang='ch', show_log=False)
+        except Exception as e:
+            raise RuntimeError(f"初始化 OCR 失败: {e}")
 
     def preprocess(self, img_pil):
         if self.sharpness > 0:
@@ -219,211 +118,244 @@ class OCRWorker(QThread):
         return img_pil
 
     def run(self):
+        if self.ocr is None:
+            self.init_ocr()
         self.running = True
+        screen = QApplication.primaryScreen()
+        if not screen:
+            return
+
         while self.running:
-            results = []
-            for rect in self.regions:
+            for row_index, row in enumerate(self.rows):
                 if not self.running:
                     break
-                if rect is None or rect.width() < 5 or rect.height() < 5:
-                    results.append("")
+                if not row.enabled or row.rect is None:
                     continue
-
+                # 截图区域
+                pixmap = screen.grabWindow(0)
+                cropped = pixmap.copy(row.rect)
+                qimg = cropped.toImage().convertToFormat(4)
+                ptr = qimg.bits()
+                ptr.setsize(qimg.byteCount())
+                arr = np.array(ptr).reshape(qimg.height(), qimg.width(), 4)
+                img_pil = Image.fromarray(arr[..., :3], 'RGB')
+                img_pil = self.preprocess(img_pil)
+                # OCR
                 try:
-                    bbox = (rect.x(), rect.y(), rect.x() + rect.width(), rect.y() + rect.height())
-                    img_pil = ImageGrab.grab(bbox=bbox)
-                    img_pil = self.preprocess(img_pil)
-
-                    # PaddleOCR 识别调用
-                    img_np = np.array(img_pil)
-                    ocr_res = self.ocr_engine.ocr(img_np, cls=False)
-                    if ocr_res and ocr_res[0]:
-                        text = " ".join([line[1][0] for line in ocr_res[0]])
+                    result = self.ocr.ocr(np.array(img_pil), cls=False)
+                    if result and result[0]:
+                        text = " ".join([line[1][0] for line in result[0]])
                     else:
                         text = ""
                 except Exception:
                     text = ""
-
                 if self.keep_digits_only:
-                    allowed = set("0123456789.-")
+                    allowed = set("0123456789.")
                     text = "".join([c for c in text if c in allowed])
-                results.append(text.strip())
+                row.current_text = text.strip()
 
-            if self.running:
-                self.result_signal.emit(results)
-                self.msleep(250)
+                # 报警判断
+                alarm_value_str = row.alarm_value
+                state = "正常"
+                if text and alarm_value_str:
+                    try:
+                        current_val = float(text)
+                        alarm_val = float(alarm_value_str)
+                    except ValueError:
+                        state = "无效"
+                    else:
+                        op = row.comp_op
+                        if op == "=":
+                            met = abs(current_val - alarm_val) < 1e-6
+                        elif op == ">":
+                            met = current_val > alarm_val
+                        elif op == "<":
+                            met = current_val < alarm_val
+                        elif op == "≥":
+                            met = current_val >= alarm_val
+                        elif op == "≤":
+                            met = current_val <= alarm_val
+                        if met:
+                            row.debounce += 1
+                            if row.debounce >= 3:
+                                state = "报警！"
+                        else:
+                            row.debounce = 0
+                else:
+                    row.debounce = 0
+
+                row.state = state
+                self.update_result.emit(row_index, row.current_text, state)
+                if state == "报警！":
+                    self.alarm_triggered.emit(row_index)
+                # 行间延迟
+                self.msleep(self.interval)
 
     def stop(self):
         self.running = False
 
-# ---------- [6. 主窗口] ----------
+# ------------------- 主窗口 -------------------
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("数字屏幕监控报警工具 (PaddleOCR 版)")
-        self.setGeometry(100, 100, 1050, 800)
+        self.setWindowTitle("数字报警")
+        self.setGeometry(100, 100, 1200, 700)
 
-        ico_path = get_icon_path()
-        if ico_path:
-            icon = QIcon(ico_path)
-            self.setWindowIcon(icon)
-            QApplication.setWindowIcon(icon)
-            try:
-                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("DigitalAlarmTool.App.1.0")
-            except Exception:
-                pass
+        # 图标
+        if getattr(sys, 'frozen', False):
+            base_path = sys._MEIPASS
+        else:
+            base_path = os.path.dirname(os.path.abspath(__file__))
+        ico_path = os.path.join(base_path, "1.ico")
+        if os.path.exists(ico_path):
+            self.setWindowIcon(QIcon(ico_path))
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("DigitalAlarm")
 
-        self.ocr_engine = None
         self.config_file = "config.json"
-        self.regions = [None] * 10
-        self.alarm_value = ""
-        self.comp_op = "="
-        self.debounce_counts = [0] * 10
-        self.debounce_threshold = 3
-        self.alarm_active = False
+        self.detect_rows = []       # 存放 DetectRow 对象
+        self.detect_thread = None
+
+        # 声音设置
+        self.sound_mode = "system"      # system / custom
+        self.system_sound_alias = "SystemExclamation"
+        self.custom_sound_path = ""
+        self.loop_sound = False
+        self.mute = False
+        self.loop_playing = False
+
+        # 图像预处理
+        self.sharpness = 0
+        self.scale = 1.0
+        self.keep_digits_only = True
+        self.detect_interval = 200      # 每行检测间隔（ms）
+
+        # 报警计数
         self.total_alarm_count = 0
 
-        self.ocr_thread = None
-        self.current_set_row = -1
-
-        self.snipping_widget = SnippingWidget()
-        self.snipping_widget.region_selected.connect(self.on_region_selected)
-
+        self.tray_icon = None
+        self.init_tray()
         self.init_ui()
         self.load_config()
+        # 如果没有配置行，默认添加一行
+        if not self.detect_rows:
+            self.add_row()
 
     def init_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
 
-        # 1. 顶栏按钮
-        btn_layout = QHBoxLayout()
+        # 顶部操作按钮
+        top_btn_layout = QHBoxLayout()
+        self.btn_add = QPushButton("➕ 添加检测行")
+        self.btn_del = QPushButton("❌ 删除选中行")
         self.btn_start = QPushButton("▶ 开始监控")
         self.btn_stop = QPushButton("■ 停止监控")
         self.btn_stop.setEnabled(False)
         self.btn_save = QPushButton("💾 保存配置")
         self.btn_load = QPushButton("📂 加载配置")
+        self.btn_tray = QPushButton("🔽 最小化托盘")
+        top_btn_layout.addWidget(self.btn_add)
+        top_btn_layout.addWidget(self.btn_del)
+        top_btn_layout.addWidget(self.btn_start)
+        top_btn_layout.addWidget(self.btn_stop)
+        top_btn_layout.addWidget(self.btn_save)
+        top_btn_layout.addWidget(self.btn_load)
+        top_btn_layout.addWidget(self.btn_tray)
+        main_layout.addLayout(top_btn_layout)
 
-        btn_layout.addWidget(self.btn_start)
-        btn_layout.addWidget(self.btn_stop)
-        btn_layout.addWidget(self.btn_save)
-        btn_layout.addWidget(self.btn_load)
-        main_layout.addLayout(btn_layout)
-
-        # 2. 模型设置 (支持自定义本地 Paddle 识别模型目录)
-        model_group = QGroupBox("OCR 模型与内核设置 (PaddleOCR)")
-        model_layout = QHBoxLayout(model_group)
-        
-        self.check_custom_model = QCheckBox("使用自定义本地识别模型目录 (rec_model_dir)")
-        self.edit_rec_model_path = QLineEdit()
-        self.edit_rec_model_path.setPlaceholderText("可不填，默认自动下载官方轻量英文/数字模型")
-        self.btn_select_model = QPushButton("选择文件夹...")
-        self.btn_select_model.setEnabled(False)
-
-        self.check_custom_model.toggled.connect(lambda checked: self.btn_select_model.setEnabled(checked))
-        self.btn_select_model.clicked.connect(self.select_local_model)
-
-        model_layout.addWidget(self.check_custom_model)
-        model_layout.addWidget(self.edit_rec_model_path)
-        model_layout.addWidget(self.btn_select_model)
-        main_layout.addWidget(model_group)
-
-        # 3. 报警条件
-        alarm_group = QGroupBox("报警条件设置")
-        alarm_layout = QHBoxLayout(alarm_group)
-        alarm_layout.addWidget(QLabel("报警数值:"))
-        self.edit_alarm_value = QLineEdit()
-        self.edit_alarm_value.setPlaceholderText("例如: 100")
-        self.edit_alarm_value.setMaximumWidth(120)
-        alarm_layout.addWidget(self.edit_alarm_value)
-        alarm_layout.addWidget(QLabel("触发条件:"))
-        self.combo_comp_op = QComboBox()
-        self.combo_comp_op.addItems(["=", ">", "<", "≥", "≤"])
-        alarm_layout.addWidget(self.combo_comp_op)
-        alarm_layout.addStretch()
-        main_layout.addWidget(alarm_group)
-
-        # 4. 区域表格
-        self.table = QTableWidget(10, 5)
-        self.table.setHorizontalHeaderLabels(["行号", "操作", "区域坐标 X, Y, W, H (可手动修改)", "实时识别值", "状态"])
-        self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.setColumnWidth(0, 60)
+        # 检测行表格
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["行号", "区域设置", "报警值", "条件", "当前值", "状态"])
+        self.table.setColumnWidth(0, 50)
         self.table.setColumnWidth(1, 80)
-        self.table.setColumnWidth(2, 250)
-        self.table.setColumnWidth(3, 140)
-
-        for i in range(10):
-            self.table.setItem(i, 0, QTableWidgetItem(f"第 {i+1} 行"))
-            self.table.item(i, 0).setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
-            
-            btn = QPushButton("框选")
-            btn.clicked.connect(lambda checked, row=i: self.set_single_region(row))
-            self.table.setCellWidget(i, 1, btn)
-            
-            self.table.setItem(i, 2, QTableWidgetItem("未框选"))
-            
-            item_val = QTableWidgetItem("")
-            item_val.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
-            self.table.setItem(i, 3, item_val)
-            
-            item_status = QTableWidgetItem("待设置")
-            item_status.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
-            self.table.setItem(i, 4, item_status)
-
-        self.table.itemChanged.connect(self.on_table_item_changed)
+        self.table.setColumnWidth(2, 100)
+        self.table.setColumnWidth(3, 80)
+        self.table.setColumnWidth(4, 80)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.SelectedClicked)
         main_layout.addWidget(self.table)
 
-        # 5. 报警声音设置
-        sound_group = QGroupBox("报警声音设置")
-        sound_layout = QHBoxLayout(sound_group)
-        sound_layout.addWidget(QLabel("系统声音:"))
+        # 全局声音设置
+        sound_group = QGroupBox("报警声音设置（全局）")
+        sound_layout = QVBoxLayout(sound_group)
+        mode_layout = QHBoxLayout()
+        self.radio_system = QRadioButton("系统声音")
+        self.radio_custom = QRadioButton("自定义声音")
+        self.radio_system.setChecked(True)
+        mode_group = QButtonGroup(self)
+        mode_group.addButton(self.radio_system, 0)
+        mode_group.addButton(self.radio_custom, 1)
+        mode_layout.addWidget(self.radio_system)
+        mode_layout.addWidget(self.radio_custom)
+        mode_layout.addStretch()
+        sound_layout.addLayout(mode_layout)
+
+        sys_layout = QHBoxLayout()
+        sys_layout.addWidget(QLabel("选择系统声音:"))
         self.combo_system_sound = QComboBox()
-        self.combo_system_sound.addItems(["SystemExclamation", "SystemAsterisk", "SystemHand", "SystemQuestion", "SystemDefault"])
-        sound_layout.addWidget(self.combo_system_sound)
+        self.combo_system_sound.addItems(["SystemAsterisk", "SystemExclamation", "SystemHand", "SystemQuestion", "SystemDefault"])
+        self.combo_system_sound.setCurrentText("SystemExclamation")
+        sys_layout.addWidget(self.combo_system_sound)
+        sys_layout.addStretch()
+        self.sys_widget = QWidget()
+        self.sys_widget.setLayout(sys_layout)
+        sound_layout.addWidget(self.sys_widget)
 
+        custom_layout = QHBoxLayout()
+        custom_layout.addWidget(QLabel("声音文件 (.wav):"))
+        self.edit_sound_path = QLineEdit()
+        custom_layout.addWidget(self.edit_sound_path)
+        self.btn_browse = QPushButton("浏览...")
+        custom_layout.addWidget(self.btn_browse)
         self.btn_test_sound = QPushButton("试听")
-        sound_layout.addWidget(self.btn_test_sound)
+        custom_layout.addWidget(self.btn_test_sound)
+        self.custom_widget = QWidget()
+        self.custom_widget.setLayout(custom_layout)
+        self.custom_widget.setVisible(False)
+        sound_layout.addWidget(self.custom_widget)
 
-        sound_layout.addSpacing(20)
+        loop_layout = QHBoxLayout()
         self.check_loop = QCheckBox("循环播放")
-        self.check_mute = QCheckBox("静音")
-        sound_layout.addWidget(self.check_loop)
-        sound_layout.addWidget(self.check_mute)
-        sound_layout.addStretch()
+        self.check_mute = QCheckBox("静音（不播放声音）")
+        loop_layout.addWidget(self.check_loop)
+        loop_layout.addWidget(self.check_mute)
+        loop_layout.addStretch()
+        sound_layout.addLayout(loop_layout)
         main_layout.addWidget(sound_group)
 
-        # 6. 图像预处理
-        preproc_group = QGroupBox("图像预处理")
-        preproc_layout = QHBoxLayout(preproc_group)
-        preproc_layout.addWidget(QLabel("锐化强度:"))
+        # 图像预处理
+        preproc_group = QGroupBox("图像预处理（识别锐化与放大）")
+        preproc_layout = QVBoxLayout(preproc_group)
+        sharp_layout = QHBoxLayout()
+        sharp_layout.addWidget(QLabel("锐化强度:"))
         self.slider_sharpness = QSlider(Qt.Horizontal)
         self.slider_sharpness.setRange(0, 100)
         self.slider_sharpness.setValue(0)
-        preproc_layout.addWidget(self.slider_sharpness)
+        sharp_layout.addWidget(self.slider_sharpness)
         self.label_sharpness_val = QLabel("0")
-        preproc_layout.addWidget(self.label_sharpness_val)
-
-        preproc_layout.addSpacing(20)
-        preproc_layout.addWidget(QLabel("放大倍数:"))
+        sharp_layout.addWidget(self.label_sharpness_val)
+        preproc_layout.addLayout(sharp_layout)
+        scale_layout = QHBoxLayout()
+        scale_layout.addWidget(QLabel("放大倍数:"))
         self.spin_scale = QDoubleSpinBox()
         self.spin_scale.setRange(1.0, 4.0)
         self.spin_scale.setSingleStep(0.1)
         self.spin_scale.setValue(1.0)
-        preproc_layout.addWidget(self.spin_scale)
-
-        self.check_digits_only = QCheckBox("仅保留数字与小数点")
+        scale_layout.addWidget(self.spin_scale)
+        scale_layout.addStretch()
+        preproc_layout.addLayout(scale_layout)
+        self.check_digits_only = QCheckBox("只保留数字和小数点")
         self.check_digits_only.setChecked(True)
-        preproc_layout.addSpacing(20)
         preproc_layout.addWidget(self.check_digits_only)
-        preproc_layout.addStretch()
         main_layout.addWidget(preproc_group)
 
-        # 7. 日志
-        log_group = QGroupBox("报警日志")
+        # 日志
+        log_group = QGroupBox("报警记录")
         log_layout = QVBoxLayout(log_group)
         count_layout = QHBoxLayout()
-        count_layout.addWidget(QLabel("触发总次数:"))
+        count_layout.addWidget(QLabel("报警总次数:"))
         self.label_alarm_count = QLabel("0")
         count_layout.addWidget(self.label_alarm_count)
         count_layout.addStretch()
@@ -433,244 +365,286 @@ class MainWindow(QMainWindow):
         log_layout.addWidget(self.log_text)
         main_layout.addWidget(log_group)
 
-        # 事件绑定
+        # 信号连接
+        self.btn_add.clicked.connect(self.add_row)
+        self.btn_del.clicked.connect(self.delete_selected_row)
         self.btn_start.clicked.connect(self.start_monitor)
         self.btn_stop.clicked.connect(self.stop_monitor)
         self.btn_save.clicked.connect(self.save_config)
         self.btn_load.clicked.connect(self.load_config)
+        self.btn_tray.clicked.connect(self.hide_to_tray)
+
+        self.radio_system.toggled.connect(self.on_sound_mode_changed)
+        self.radio_custom.toggled.connect(self.on_sound_mode_changed)
+        self.btn_browse.clicked.connect(self.browse_sound)
         self.btn_test_sound.clicked.connect(self.test_sound)
         self.slider_sharpness.valueChanged.connect(lambda v: self.label_sharpness_val.setText(str(v)))
+        self.check_loop.stateChanged.connect(lambda state: setattr(self, 'loop_sound', state == Qt.Checked))
+        self.check_mute.stateChanged.connect(lambda state: setattr(self, 'mute', state == Qt.Checked))
 
-    def select_local_model(self):
-        dir_path = QFileDialog.getExistingDirectory(self, "选择 PaddleOCR 识别模型文件夹 (rec_model_dir)")
-        if dir_path:
-            self.edit_rec_model_path.setText(dir_path)
+    def init_tray(self):
+        self.tray_icon = QSystemTrayIcon(self)
+        if getattr(sys, 'frozen', False):
+            ico_path = os.path.join(sys._MEIPASS, "1.ico")
+        else:
+            ico_path = os.path.join(os.path.dirname(__file__), "1.ico")
+        if os.path.exists(ico_path):
+            self.tray_icon.setIcon(QIcon(ico_path))
+        else:
+            self.tray_icon.setIcon(self.style().standardIcon(QStyle.SP_ComputerIcon))
+        tray_menu = QMenu()
+        show_action = QAction("显示主窗口", self)
+        show_action.triggered.connect(self.show_normal)
+        quit_action = QAction("退出", self)
+        quit_action.triggered.connect(self.quit_app)
+        tray_menu.addAction(show_action)
+        tray_menu.addAction(quit_action)
+        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.activated.connect(self.on_tray_activated)
+        self.tray_icon.show()
+
+    def on_tray_activated(self, reason):
+        if reason == QSystemTrayIcon.DoubleClick:
+            self.show_normal()
+
+    def hide_to_tray(self):
+        self.hide()
+        self.tray_icon.showMessage("数字报警", "程序已最小化到系统托盘", QSystemTrayIcon.Information, 2000)
+
+    def show_normal(self):
+        self.show()
+        self.setWindowState(Qt.WindowActive)
 
     def quit_app(self):
-        self.stop_monitor()
+        if self.detect_thread and self.detect_thread.isRunning():
+            self.detect_thread.stop()
+            self.detect_thread.wait(2000)
+        self.stop_alarm_sound()
+        self.tray_icon.hide()
         QApplication.quit()
 
     def closeEvent(self, event):
-        self.quit_app()
-        event.accept()
+        if self.tray_icon.isVisible():
+            self.hide_to_tray()
+            event.ignore()
+        else:
+            self.quit_app()
+
+    # ---------- 行管理 ----------
+    def add_row(self):
+        row = DetectRow()
+        self.detect_rows.append(row)
+        self.update_table_row(len(self.detect_rows)-1)
+        # 自动编号
+        self.refresh_row_numbers()
+
+    def delete_selected_row(self):
+        selected = self.table.selectionModel().selectedRows()
+        if not selected:
+            QMessageBox.warning(self, "提示", "请先选择要删除的行")
+            return
+        # 倒序删除，避免索引错乱
+        indices = sorted([idx.row() for idx in selected], reverse=True)
+        for idx in indices:
+            del self.detect_rows[idx]
+            self.table.removeRow(idx)
+        self.refresh_row_numbers()
+
+    def update_table_row(self, index):
+        """根据 detect_rows[index] 更新表格的行"""
+        row = self.detect_rows[index]
+        if self.table.rowCount() <= index:
+            self.table.insertRow(index)
+        # 列0：行号（稍后统一刷新）
+        # 列1：区域设置按钮
+        btn = QPushButton("框选区域")
+        btn.clicked.connect(lambda checked, idx=index: self.set_region_for_row(idx))
+        self.table.setCellWidget(index, 1, btn)
+        # 列2：报警值（可编辑）
+        item_alarm = QTableWidgetItem(row.alarm_value)
+        self.table.setItem(index, 2, item_alarm)
+        # 列3：条件（下拉框）
+        combo = QComboBox()
+        combo.addItems(["=", ">", "<", "≥", "≤"])
+        combo.setCurrentText(row.comp_op)
+        combo.currentTextChanged.connect(lambda text, idx=index: self.on_comp_changed(idx, text))
+        self.table.setCellWidget(index, 3, combo)
+        # 列4：当前值
+        self.table.setItem(index, 4, QTableWidgetItem(row.current_text))
+        # 列5：状态
+        self.table.setItem(index, 5, QTableWidgetItem(row.state))
+
+    def refresh_row_numbers(self):
+        for i in range(self.table.rowCount()):
+            self.table.setItem(i, 0, QTableWidgetItem(str(i+1)))
+
+    def set_region_for_row(self, index):
+        self.current_set_row = index
+        self.selector = RegionSelector()
+        self.selector.region_selected.connect(self.on_region_selected_for_row)
+        self.selector.show()
+        QMessageBox.information(self, "提示", f"请在第 {index+1} 行点击【左上角】，再点击【右下角】")
+
+    def on_region_selected_for_row(self, rect):
+        if hasattr(self, 'current_set_row') and 0 <= self.current_set_row < len(self.detect_rows):
+            self.detect_rows[self.current_set_row].rect = rect
+            QMessageBox.information(self, "完成", f"第 {self.current_set_row+1} 行区域已设置")
+        self.current_set_row = -1
+
+    def on_comp_changed(self, index, text):
+        if 0 <= index < len(self.detect_rows):
+            self.detect_rows[index].comp_op = text
+
+    # ---------- 声音控制 ----------
+    def on_sound_mode_changed(self):
+        if self.radio_system.isChecked():
+            self.sound_mode = "system"
+            self.sys_widget.setVisible(True)
+            self.custom_widget.setVisible(False)
+        else:
+            self.sound_mode = "custom"
+            self.sys_widget.setVisible(False)
+            self.custom_widget.setVisible(True)
+
+    def browse_sound(self):
+        path, _ = QFileDialog.getOpenFileName(self, "选择声音文件", os.path.join(os.environ["WINDIR"], "Media"), "WAV 文件 (*.wav)")
+        if path:
+            self.edit_sound_path.setText(path)
 
     def test_sound(self):
-        alias = self.combo_system_sound.currentText()
-        try:
-            winsound.PlaySound(alias, winsound.SND_ALIAS | winsound.SND_ASYNC)
-        except Exception:
-            pass
+        if self.sound_mode == "system":
+            alias = self.combo_system_sound.currentText()
+            try:
+                winsound.PlaySound(alias, winsound.SND_ALIAS | winsound.SND_ASYNC)
+            except:
+                pass
+        else:
+            path = self.edit_sound_path.text().strip()
+            if path and os.path.exists(path):
+                winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+            else:
+                QMessageBox.warning(self, "错误", "声音文件不存在")
 
     def play_alarm_sound(self):
-        if self.check_mute.isChecked():
+        if self.mute:
             return
-        flags = winsound.SND_ASYNC
-        if self.check_loop.isChecked():
-            flags |= winsound.SND_LOOP
-
-        alias = self.combo_system_sound.currentText()
-        winsound.PlaySound(alias, winsound.SND_ALIAS | flags)
+        if self.sound_mode == "system":
+            alias = self.combo_system_sound.currentText()
+            flags = winsound.SND_ALIAS | winsound.SND_ASYNC
+            if self.loop_sound:
+                flags |= winsound.SND_LOOP
+            winsound.PlaySound(alias, flags)
+            self.loop_playing = self.loop_sound
+        else:
+            path = self.edit_sound_path.text().strip()
+            if not path or not os.path.exists(path):
+                return
+            flags = winsound.SND_FILENAME | winsound.SND_ASYNC
+            if self.loop_sound:
+                flags |= winsound.SND_LOOP
+            winsound.PlaySound(path, flags)
+            self.loop_playing = self.loop_sound
 
     def stop_alarm_sound(self):
-        winsound.PlaySound(None, winsound.SND_PURGE)
+        if self.loop_playing:
+            winsound.PlaySound(None, winsound.SND_PURGE)
+            self.loop_playing = False
 
-    def set_single_region(self, row):
-        self.current_set_row = row
-        tip = f"请按住左键框选【第 {row+1} 行】的识别区域"
-        self.snipping_widget.start_snipping(tip)
-
-    def on_region_selected(self, rect):
-        if 0 <= self.current_set_row < 10:
-            self.regions[self.current_set_row] = rect
-            coord_str = f"{rect.x()}, {rect.y()}, {rect.width()}, {rect.height()}"
-            
-            self.table.blockSignals(True)
-            self.table.setItem(self.current_set_row, 2, QTableWidgetItem(coord_str))
-            btn = self.table.cellWidget(self.current_set_row, 1)
-            if btn:
-                btn.setText("重新框选")
-            self.table.setItem(self.current_set_row, 4, QTableWidgetItem("待监控"))
-            self.table.blockSignals(False)
-
-    def on_table_item_changed(self, item):
-        if item.column() == 2:
-            row = item.row()
-            text = item.text().replace("，", ",").replace("(", "").replace(")", "").strip()
-            try:
-                parts = [int(p.strip()) for p in text.split(",")]
-                if len(parts) == 4 and parts[2] > 0 and parts[3] > 0:
-                    self.regions[row] = QRect(parts[0], parts[1], parts[2], parts[3])
-                    self.table.item(row, 4).setText("待监控")
-                else:
-                    raise ValueError
-            except Exception:
-                self.regions[row] = None
-                self.table.blockSignals(True)
-                self.table.item(row, 2).setText("未框选")
-                self.table.blockSignals(False)
-
-    # ---------- [7. 监控与 PaddleOCR 动态加载流程] ----------
+    # ---------- 监控控制 ----------
     def start_monitor(self):
-        if all(r is None for r in self.regions):
-            QMessageBox.warning(self, "提示", "请至少指定 1 个识别区域！")
+        # 检查至少有一行设置了区域
+        valid = any(row.rect is not None for row in self.detect_rows)
+        if not valid:
+            QMessageBox.warning(self, "错误", "至少需要设置一个识别区域！")
             return
 
-        if self.ocr_engine is None:
-            self.log("正在初始化 PaddleOCR 引擎，请稍候...")
-            QApplication.processEvents()
-            
-            try:
-                from paddleocr import PaddleOCR
-            except Exception as e:
-                QMessageBox.critical(self, "环境缺失", f"无法导入 PaddleOCR 库:\n{e}\n\n请确认已安装 paddlepaddle 和 paddleocr 依赖。")
-                self.log(f"加载 PaddleOCR 库失败: {e}")
-                return
+        # 从界面读取每行的报警值和条件
+        for i, row in enumerate(self.detect_rows):
+            item = self.table.item(i, 2)
+            if item:
+                row.alarm_value = item.text()
+            combo = self.table.cellWidget(i, 3)
+            if combo:
+                row.comp_op = combo.currentText()
 
-            try:
-                custom_dir = self.edit_rec_model_path.text().strip()
-                if self.check_custom_model.isChecked() and custom_dir and os.path.exists(custom_dir):
-                    self.ocr_engine = PaddleOCR(rec_model_dir=custom_dir, lang='en', show_log=False, use_gpu=False)
-                    self.log(f"已加载自定义 PaddleOCR 模型目录: {custom_dir}")
-                else:
-                    self.ocr_engine = PaddleOCR(lang='en', show_log=False, use_gpu=False)
-                    self.log("已加载标准 PaddleOCR 内核 (英文/数字模式)。")
-            except Exception as e:
-                QMessageBox.critical(self, "内核初始化失败", f"初始化 PaddleOCR 出错:\n{e}")
-                return
+        self.sharpness = self.slider_sharpness.value()
+        self.scale = self.spin_scale.value()
+        self.keep_digits_only = self.check_digits_only.isChecked()
 
-        self.alarm_value = self.edit_alarm_value.text().strip()
-        self.comp_op = self.combo_comp_op.currentText()
+        if self.detect_thread and self.detect_thread.isRunning():
+            self.detect_thread.stop()
+            self.detect_thread.wait(2000)
 
-        if self.ocr_thread and self.ocr_thread.isRunning():
-            self.ocr_thread.stop()
-            self.ocr_thread.wait()
-
-        self.ocr_thread = OCRWorker(
-            self.regions, self.ocr_engine,
-            sharpness=self.slider_sharpness.value(),
-            scale=self.spin_scale.value(),
-            keep_digits_only=self.check_digits_only.isChecked()
+        self.detect_thread = DetectWorker(
+            self.detect_rows,
+            sharpness=self.sharpness,
+            scale=self.scale,
+            keep_digits_only=self.keep_digits_only,
+            interval=self.detect_interval
         )
-        self.ocr_thread.result_signal.connect(self.process_results)
-        self.ocr_thread.start()
+        self.detect_thread.update_result.connect(self.on_update_result)
+        self.detect_thread.alarm_triggered.connect(self.on_alarm_triggered)
+        self.detect_thread.start()
 
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)
-        self.log("▶ 屏幕监控已启动。")
+        self.log("监控已启动。")
 
     def stop_monitor(self):
-        if self.ocr_thread and self.ocr_thread.isRunning():
-            self.ocr_thread.stop()
-            self.ocr_thread.wait()
-
+        if self.detect_thread:
+            self.detect_thread.stop()
+            self.detect_thread.wait(2000)
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self.stop_alarm_sound()
-        self.alarm_active = False
-        self.log("■ 监控已停止。")
+        self.log("监控已停止。")
 
-    def process_results(self, results):
-        alarm_triggered = False
-        alarm_rows = []
+    def on_update_result(self, index, current_text, state):
+        if 0 <= index < self.table.rowCount():
+            self.table.item(index, 4).setText(current_text)
+            self.table.item(index, 5).setText(state)
 
-        for i, text in enumerate(results):
-            if i >= 10:
-                break
-            self.table.item(i, 3).setText(text)
-
-            if not text or self.regions[i] is None:
-                if self.regions[i] is not None:
-                    self.table.item(i, 4).setText("监测中...")
-                self.debounce_counts[i] = 0
-                continue
-
-            try:
-                current_val = float(text)
-            except ValueError:
-                self.table.item(i, 4).setText("非有效数字")
-                self.debounce_counts[i] = 0
-                continue
-
-            if not self.alarm_value:
-                self.table.item(i, 4).setText("未设报警值")
-                self.debounce_counts[i] = 0
-                continue
-
-            try:
-                alarm_val = float(self.alarm_value)
-            except ValueError:
-                self.table.item(i, 4).setText("阈值无效")
-                self.debounce_counts[i] = 0
-                continue
-
-            op = self.comp_op
-            condition_met = False
-            if op == "=":
-                condition_met = abs(current_val - alarm_val) < 1e-6
-            elif op == ">":
-                condition_met = current_val > alarm_val
-            elif op == "<":
-                condition_met = current_val < alarm_val
-            elif op == "≥":
-                condition_met = current_val >= alarm_val
-            elif op == "≤":
-                condition_met = current_val <= alarm_val
-
-            if condition_met:
-                self.debounce_counts[i] += 1
-                if self.debounce_counts[i] >= self.debounce_threshold:
-                    self.table.item(i, 4).setText("⚠️ 报警触发！")
-                    alarm_triggered = True
-                    alarm_rows.append(i + 1)
-                else:
-                    self.table.item(i, 4).setText("疑似超限...")
-            else:
-                self.debounce_counts[i] = 0
-                self.table.item(i, 4).setText("正常")
-
-        if alarm_triggered:
-            if not self.alarm_active:
-                self.play_alarm_sound()
-                self.alarm_active = True
-                self.total_alarm_count += 1
-                self.label_alarm_count.setText(str(self.total_alarm_count))
-                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                self.log(f"[{now}] 🚨 触发报警！行号: {alarm_rows} | 条件: {self.comp_op} {self.alarm_value}")
-        else:
-            if self.alarm_active:
-                self.stop_alarm_sound()
-                self.alarm_active = False
+    def on_alarm_triggered(self, index):
+        if not self.mute:
+            self.play_alarm_sound()
+        self.total_alarm_count += 1
+        self.label_alarm_count.setText(str(self.total_alarm_count))
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.log(f"{now} - 行 {index+1} 触发报警，值: {self.detect_rows[index].current_text}")
 
     def log(self, message):
         self.log_text.append(message)
 
+    # ---------- 配置存取 ----------
     def save_config(self):
         config = {
-            "regions": [],
-            "alarm_value": self.edit_alarm_value.text(),
-            "comp_op": self.combo_comp_op.currentText(),
+            "rows": [],
+            "sound_mode": self.sound_mode,
             "system_sound_alias": self.combo_system_sound.currentText(),
+            "custom_sound_path": self.edit_sound_path.text(),
             "loop_sound": self.check_loop.isChecked(),
             "mute": self.check_mute.isChecked(),
             "sharpness": self.slider_sharpness.value(),
             "scale": self.spin_scale.value(),
             "keep_digits_only": self.check_digits_only.isChecked(),
-            "total_alarm_count": self.total_alarm_count,
-            "use_custom_model": self.check_custom_model.isChecked(),
-            "rec_model_path": self.edit_rec_model_path.text()
+            "detect_interval": self.detect_interval,
+            "total_alarm_count": self.total_alarm_count
         }
-        for rect in self.regions:
-            if rect:
-                config["regions"].append([rect.x(), rect.y(), rect.width(), rect.height()])
-            else:
-                config["regions"].append(None)
-
+        for row in self.detect_rows:
+            r = None
+            if row.rect:
+                r = [row.rect.x(), row.rect.y(), row.rect.width(), row.rect.height()]
+            config["rows"].append({
+                "rect": r,
+                "alarm_value": row.alarm_value,
+                "comp_op": row.comp_op
+            })
         try:
             with open(self.config_file, "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
-            QMessageBox.information(self, "成功", "配置文件保存成功！")
+            QMessageBox.information(self, "成功", "配置已保存。")
         except Exception as e:
-            QMessageBox.critical(self, "错误", f"保存配置失败: {e}")
+            QMessageBox.warning(self, "错误", f"保存失败: {e}")
 
     def load_config(self):
         if not os.path.exists(self.config_file):
@@ -678,43 +652,40 @@ class MainWindow(QMainWindow):
         try:
             with open(self.config_file, "r", encoding="utf-8") as f:
                 config = json.load(f)
-
-            self.table.blockSignals(True)
-            regions = config.get("regions", [])
-            for i, r in enumerate(regions[:10]):
-                if r:
-                    self.regions[i] = QRect(r[0], r[1], r[2], r[3])
-                    self.table.setItem(i, 2, QTableWidgetItem(f"{r[0]}, {r[1]}, {r[2]}, {r[3]}"))
-                    btn = self.table.cellWidget(i, 1)
-                    if btn:
-                        btn.setText("重新框选")
-                    self.table.setItem(i, 4, QTableWidgetItem("待监控"))
-                else:
-                    self.regions[i] = None
-                    self.table.setItem(i, 2, QTableWidgetItem("未框选"))
-            self.table.blockSignals(False)
-
-            self.edit_alarm_value.setText(config.get("alarm_value", ""))
-            self.combo_comp_op.setCurrentText(config.get("comp_op", "="))
+            self.detect_rows.clear()
+            self.table.setRowCount(0)
+            rows_data = config.get("rows", [])
+            for d in rows_data:
+                rect = None
+                if d.get("rect"):
+                    x, y, w, h = d["rect"]
+                    rect = QRect(x, y, w, h)
+                row = DetectRow(rect=rect, alarm_value=d.get("alarm_value", ""), comp_op=d.get("comp_op", "="))
+                self.detect_rows.append(row)
+                self.update_table_row(len(self.detect_rows)-1)
+            self.refresh_row_numbers()
+            # 声音设置
+            self.sound_mode = config.get("sound_mode", "system")
+            if self.sound_mode == "system":
+                self.radio_system.setChecked(True)
+            else:
+                self.radio_custom.setChecked(True)
             self.combo_system_sound.setCurrentText(config.get("system_sound_alias", "SystemExclamation"))
+            self.edit_sound_path.setText(config.get("custom_sound_path", ""))
             self.check_loop.setChecked(config.get("loop_sound", False))
             self.check_mute.setChecked(config.get("mute", False))
             self.slider_sharpness.setValue(config.get("sharpness", 0))
             self.spin_scale.setValue(config.get("scale", 1.0))
             self.check_digits_only.setChecked(config.get("keep_digits_only", True))
+            self.detect_interval = config.get("detect_interval", 200)
             self.total_alarm_count = config.get("total_alarm_count", 0)
             self.label_alarm_count.setText(str(self.total_alarm_count))
-            
-            self.check_custom_model.setChecked(config.get("use_custom_model", False))
-            self.edit_rec_model_path.setText(config.get("rec_model_path", ""))
         except Exception as e:
-            self.log(f"加载配置文件时遇到异常: {e}")
+            QMessageBox.warning(self, "错误", f"配置加载失败: {e}")
 
-# ---------- [8. 程序统一入口] ----------
 if __name__ == "__main__":
-    multiprocessing.freeze_support()
-    
     app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())
