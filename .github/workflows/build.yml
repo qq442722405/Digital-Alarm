@@ -1,4 +1,4 @@
-name: 数字报警
+name: Build ScreenAlarm EXE
 
 on:
   workflow_dispatch:
@@ -8,35 +8,29 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: 检出源码
+        uses: actions/checkout@v4
 
-    - name: Set up Python 3.11
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install pyqt5 pillow pyinstaller
-        pip install paddlepaddle paddleocr
+      - name: 升级 pip
+        run: |
+          python -m pip install --upgrade pip
 
-    - name: Download PaddleOCR models
-      run: |
-        python -c "from paddleocr import PaddleOCR; ocr = PaddleOCR(lang='ch', show_log=False); print('Models ready')"
+      - name: 安装依赖
+        run: |
+          pip install -r requirements.txt
 
-    - name: Build EXE (force include pyclipper)
-      run: |
-        pyinstaller --onefile --windowed --name "数字报警" `
-          --add-data "$env:USERPROFILE\.paddlex;./.paddlex" `
-          --add-data "1.ico;." `
-          --collect-all paddleocr --collect-all paddle --collect-all torch `
-          --hidden-import win32api --hidden-import pyclipper `
-          ScreenAlarm.py
+      - name: 使用 Spec 打包 EXE
+        shell: cmd
+        run: |
+          pyinstaller --clean --noconfirm ScreenAlarm.spec
 
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: 数字报警
-        path: dist\数字报警.exe
+      - name: 上传 EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScreenAlarm_EXE
+          path: dist/ScreenAlarm.exe
