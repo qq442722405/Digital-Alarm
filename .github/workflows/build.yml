@@ -1,49 +1,37 @@
-name: Build Executable
+name: 数字报警
 
 on:
   push:
     branches: [ "main", "master" ]
-  pull_request:
-    branches: [ "main", "master" ]
+  workflow_dispatch: # 支持在 GitHub 页面手动点击运行
 
 jobs:
   build:
     runs-on: windows-latest
 
     steps:
-    - name: Checkout Code
+    - name: 检出代码
       uses: actions/checkout@v4
 
-    - name: Set up Python 3.11
+    - name: 配置 Python 环境
       uses: actions/setup-python@v5
       with:
-        python-version: '3.11'
+        python-version: '3.10' # 对 PaddleOCR 和 PyQt5 兼容性最好
+        cache: 'pip' # 启用 pip 缓存，大幅加快后续构建速度
 
-    - name: Install Dependencies
+    - name: 安装依赖
       run: |
-        python -m pip install --upgrade pip setuptools wheel
-        # 强制安装 PyMuPDF 的 预编译二进制包（解决 devenv.com 报错）
-        pip install "PyMuPDF>=1.23.0" --only-binary PyMuPDF
-        # 安装项目主依赖
-        pip install "numpy<2" paddlepaddle==2.6.2 paddleocr==2.7.0.0 PyQt5 Pillow imgaug pyclipper shapely lmdb pyinstaller
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
 
-    - name: Build EXE with PyInstaller
+    - name: 使用 PyInstaller 打包
       run: |
-        # 获取 paddleocr 安装路径并定位 ppocr 文件夹，将其打包进 EXE
-        $PADDLE_DIR = python -c "import paddleocr, os; print(os.path.dirname(paddleocr.__file__))"
-        $PPOCR_DIR = Join-Path $PADDLE_DIR "ppocr"
-        
-        pyinstaller --noconfirm --onedir --windowed `
-          --add-data "$PPOCR_DIR;ppocr" `
-          --hidden-import "paddleocr" `
-          --hidden-import "pyclipper" `
-          --hidden-import "shapely" `
-          --hidden-import "imgaug" `
-          --hidden-import "lmdb" `
-          ScreenAlarm.py
+        pyinstaller --noconsole --onefile --collect-all paddleocr --collect-all paddle --add-data "1.ico;." --name "ScreenMonitorAlarm" main.py
 
-    - name: Upload Artifact
+    - name: 上传生成的 EXE 成果物
       uses: actions/upload-artifact@v4
       with:
-        name: ScreenAlarm-Windows
-        path: dist/ScreenAlarm/
+        name: ScreenMonitorAlarm-Windows
+        path: dist/ScreenMonitorAlarm.exe
+        retention-days: 7 # 成果物保留天数（可按需修改）
