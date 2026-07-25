@@ -3,7 +3,7 @@ name: 数字报警
 on:
   push:
     branches: [ "main", "master" ]
-  workflow_dispatch: # 支持在 GitHub 页面手动点击运行
+  workflow_dispatch: # 支持在 GitHub 页面手动点击触发打包
 
 jobs:
   build:
@@ -16,8 +16,8 @@ jobs:
     - name: 配置 Python 环境
       uses: actions/setup-python@v5
       with:
-        python-version: '3.10' # 对 PaddleOCR 和 PyQt5 兼容性最好
-        cache: 'pip' # 启用 pip 缓存，大幅加快后续构建速度
+        python-version: '3.10' # 3.10 对 PaddleOCR 和 PyQt5 兼容性最好
+        cache: 'pip' # 开启依赖缓存，提升后续构建速度
 
     - name: 安装依赖
       run: |
@@ -27,11 +27,11 @@ jobs:
 
     - name: 使用 PyInstaller 打包
       run: |
-        pyinstaller --noconsole --onefile --collect-all paddleocr --collect-all paddle --add-data "1.ico;." --name "ScreenMonitorAlarm" main.py
+        # 修正：将入口文件名从 main.py 改为 ScreenAlarm.py
+        pyinstaller --noconsole --onefile --collect-all paddleocr --collect-all paddle --add-data "1.ico;." --name "ScreenMonitorAlarm" ScreenAlarm.py
 
     - name: 上传生成的 EXE 成果物
       uses: actions/upload-artifact@v4
       with:
         name: ScreenMonitorAlarm-Windows
         path: dist/ScreenMonitorAlarm.exe
-        retention-days: 7 # 成果物保留天数（可按需修改）
