@@ -1,69 +1,104 @@
-name: Build ScreenAlarm EXE
+name: Build 数字报警 EXE
+
 
 on:
 
   workflow_dispatch:
 
   push:
+
     branches:
       - main
       - master
 
 
+
 jobs:
 
-  build:
+  build-windows:
 
     runs-on: windows-latest
 
 
     steps:
 
-    - name: Checkout
+
+    - name: 检出源码
       uses: actions/checkout@v4
 
 
-    - name: Setup Python
+
+    - name: 设置 Python
       uses: actions/setup-python@v5
       with:
-        python-version: "3.10"
+        python-version: "3.11"
 
 
-    - name: Upgrade pip
+
+    - name: 升级 pip
       shell: cmd
       run: |
+
         python -m pip install --upgrade pip
 
 
-    - name: Install CPU Torch
+
+    - name: 安装 CPU Torch
       shell: cmd
       run: |
 
         pip install ^
         --default-timeout=300 ^
-        --retries 10 ^
+        --retries=10 ^
         torch torchvision ^
         --index-url https://download.pytorch.org/whl/cpu
 
 
-    - name: Install requirements
+
+    - name: 安装项目依赖
       shell: cmd
       run: |
 
         pip install ^
         --default-timeout=300 ^
-        --retries 10 ^
+        --retries=10 ^
         -r requirements.txt
 
 
-    - name: Check files
+
+    - name: 修复打包依赖
+      shell: cmd
+      run: |
+
+        pip install ^
+        setuptools==80.9.0 ^
+        jaraco ^
+        jaraco.text ^
+        jaraco.functools ^
+        jaraco.context
+
+
+
+    - name: 检查文件
       shell: cmd
       run: |
 
         dir
 
+        echo ======
 
-    - name: Build EXE
+        dir *.py
+
+        echo ======
+
+        dir *.ico
+
+
+
+    # ===============================
+    # 打包数字报警.exe
+    # ===============================
+    - name: PyInstaller 打包
       shell: cmd
       run: |
 
@@ -72,14 +107,25 @@ jobs:
         --noconfirm ^
         --onefile ^
         --windowed ^
-        --name ScreenAlarm ^
+        --name "数字报警" ^
+        --icon "1.ico" ^
         ScreenAlarm.py
 
 
-    - name: Upload EXE
+
+    - name: 查看生成文件
+      shell: cmd
+      run: |
+
+        dir dist
+
+
+
+    - name: 上传数字报警程序
       uses: actions/upload-artifact@v4
+
       with:
 
-        name: ScreenAlarm-Windows
+        name: 数字报警-Windows
 
-        path: dist/ScreenAlarm.exe
+        path: dist/数字报警.exe
