@@ -34,7 +34,7 @@ jobs:
 
 
 
-    - name: 升级 pip
+    - name: 升级pip
 
       shell: cmd
 
@@ -44,9 +44,7 @@ jobs:
 
 
 
-    # 安装 CPU Torch
-
-    - name: 安装 CPU PyTorch
+    - name: 安装CPU Torch
 
       shell: cmd
 
@@ -60,9 +58,7 @@ jobs:
 
 
 
-    # 安装依赖
-
-    - name: 安装 requirements
+    - name: 安装依赖
 
       shell: cmd
 
@@ -75,9 +71,22 @@ jobs:
 
 
 
-    # 检查文件
+    # 强制安装jaraco
 
-    - name: 检查工程
+    - name: 安装PyInstaller运行依赖
+
+      shell: cmd
+
+      run: |
+
+        pip install ^
+        jaraco.text ^
+        jaraco.functools ^
+        jaraco.context
+
+
+
+    - name: 检查文件
 
       shell: cmd
 
@@ -93,9 +102,7 @@ jobs:
 
 
 
-    # 打包
-
-    - name: PyInstaller 打包
+    - name: PyInstaller打包
 
       shell: cmd
 
@@ -108,8 +115,6 @@ jobs:
 
 
 
-    # 查看结果
-
     - name: 查看输出
 
       shell: cmd
@@ -119,8 +124,6 @@ jobs:
         dir dist
 
 
-
-    # 上传
 
     - name: 上传数字报警
 
