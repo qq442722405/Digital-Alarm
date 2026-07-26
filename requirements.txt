@@ -4,4 +4,6 @@ numpy<2.0.0
 opencv-python-headless==4.8.1.78
 paddlepaddle==2.6.2
 paddleocr==2.8.1
+pyclipper
+shapely
 pyinstaller==6.5.0
