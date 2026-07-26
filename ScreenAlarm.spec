@@ -1,42 +1,38 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-import sys
-import os
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_all
 
-block_cipher = None
+# 1. 打包非 Python 资源文件 (图标等)
+datas = [('1.ico', '.')]
+binaries = []
 
-# 1. 自动收集 paddle 和 paddleocr 的数据文件与模型资产
-datas = [
-    ('1.ico', '.'),
-]
-datas += collect_data_files('paddleocr')
-datas += collect_data_files('paddle')
-
-# 2. 收集隐式导入与子模块 (彻底解决 No module named ppocr / tools)
+# 2. 补全 PaddleOCR 容易遗漏的隐式导入模块
 hiddenimports = [
-    'paddle',
+    'tools',
+    'tools.infer',
     'paddleocr',
-    'pyclipper',
-    'imgaug',
-    'shapely',
-    'skimage',
     'ppocr',
     'ppocr.utils',
     'ppocr.data',
     'ppocr.postprocess',
-    'tools',
-    'tools.infer',
-    'winsound',
-    'ctypes',
+    'ppocr.modeling',
+    'ppocr.optimizer',
+    'ppocr.metrics',
 ]
-hiddenimports += collect_submodules('paddleocr')
-hiddenimports += collect_submodules('ppocr')
+
+# 3. 自动扫描并搜集 paddle, paddleocr, ppocr 的所有依赖与 DLL
+for pkg in ['paddleocr', 'paddle', 'ppocr']:
+    tmp_datas, tmp_binaries, tmp_hidden = collect_all(pkg)
+    datas.extend(tmp_datas)
+    binaries.extend(tmp_binaries)
+    hiddenimports.extend(tmp_hidden)
+
+block_cipher = None
 
 a = Analysis(
     ['ScreenAlarm.py'],
     pathex=[],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
@@ -51,6 +47,7 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
+# 4. 打包为单文件 EXE (--onefile + --noconsole)
 exe = EXE(
     pyz,
     a.scripts,
@@ -58,17 +55,18 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='ScreenAlarm',
+    name='ScreenMonitorAlarm',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,  # 无控制台窗口
+    console=False,        # 不显示 CMD 黑框 (相当于 --noconsole / --windowed)
     disable_windowed_traceback=False,
+    argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='1.ico',
+    icon=['1.ico'],        # EXE 图标
 )

@@ -1,7 +1,7 @@
 PyQt5==5.15.10
 Pillow==10.3.0
 numpy<2.0.0
-opencv-python
+opencv-python-headless==4.8.1.78
 paddlepaddle==2.6.2
 paddleocr==2.8.1
 pyinstaller==6.5.0
