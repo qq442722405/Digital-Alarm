@@ -1,8 +1,22 @@
 PyQt5==5.15.10
 Pillow==10.3.0
+
 numpy<2.0.0
+
 opencv-python-headless==4.8.1.78
+
 easyocr==1.7.1
-torch>=2.0.0
+
+torch
 torchvision
+
 pyinstaller==6.5.0
+
+
+# PyInstaller运行兼容
+setuptools==80.9.0
+
+jaraco
+jaraco.text
+jaraco.functools
+jaraco.context
