@@ -1,50 +1,78 @@
 name: Build 数字报警 EXE
 
 
+# =========================
+# 仅手动触发
+# =========================
 on:
 
   workflow_dispatch:
-
-  push:
-
-    branches:
-      - main
-      - master
 
 
 
 jobs:
 
+
   build-windows:
 
+
     runs-on: windows-latest
+
 
 
     steps:
 
 
+
+    # =========================
+    # 拉取代码
+    # =========================
+
     - name: 检出源码
+
       uses: actions/checkout@v4
 
 
 
+
+    # =========================
+    # Python环境
+    # =========================
+
     - name: 设置 Python
+
       uses: actions/setup-python@v5
+
       with:
+
         python-version: "3.11"
 
 
 
+
+    # =========================
+    # 更新pip
+    # =========================
+
     - name: 升级 pip
+
       shell: cmd
+
       run: |
 
-        python -m pip install --upgrade pip
+        python -m pip install --upgrade pip setuptools wheel
 
 
+
+
+    # =========================
+    # 安装CPU版 PyTorch
+    # =========================
 
     - name: 安装 CPU Torch
+
       shell: cmd
+
       run: |
 
         pip install ^
@@ -55,8 +83,16 @@ jobs:
 
 
 
-    - name: 安装项目依赖
+
+
+    # =========================
+    # 安装项目依赖
+    # =========================
+
+    - name: 安装 requirements
+
       shell: cmd
+
       run: |
 
         pip install ^
@@ -66,66 +102,90 @@ jobs:
 
 
 
-    - name: 修复打包依赖
+
+
+    # =========================
+    # 检查文件
+    # =========================
+
+    - name: 检查工程文件
+
       shell: cmd
+
       run: |
 
-        pip install ^
-        setuptools==80.9.0 ^
-        jaraco ^
-        jaraco.text ^
-        jaraco.functools ^
-        jaraco.context
-
-
-
-    - name: 检查文件
-      shell: cmd
-      run: |
+        echo ===== 当前目录 =====
 
         dir
 
-        echo ======
+
+        echo ===== Python文件 =====
 
         dir *.py
 
-        echo ======
+
+        echo ===== Spec文件 =====
+
+        dir *.spec
+
+
+        echo ===== 图标文件 =====
 
         dir *.ico
 
 
 
-    # ===============================
-    # 打包数字报警.exe
-    # ===============================
-    - name: PyInstaller 打包
+
+
+    # =========================
+    # PyInstaller打包
+    # =========================
+
+    - name: 打包数字报警
+
       shell: cmd
+
       run: |
 
         pyinstaller ^
         --clean ^
         --noconfirm ^
-        --onefile ^
-        --windowed ^
-        --name "数字报警" ^
-        --icon "1.ico" ^
-        ScreenAlarm.py
+        ScreenAlarm.spec
 
 
+
+
+
+    # =========================
+    # 查看结果
+    # =========================
 
     - name: 查看生成文件
+
       shell: cmd
+
       run: |
+
+        echo ===== dist目录 =====
 
         dir dist
 
 
 
-    - name: 上传数字报警程序
+
+
+    # =========================
+    # 上传EXE
+    # =========================
+
+    - name: 上传数字报警
+
       uses: actions/upload-artifact@v4
 
       with:
 
+
         name: 数字报警-Windows
+
 
         path: dist/数字报警.exe
