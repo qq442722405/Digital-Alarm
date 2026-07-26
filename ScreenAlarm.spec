@@ -1,25 +1,22 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-
 from PyInstaller.utils.hooks import (
     collect_all,
-    collect_submodules,
-    collect_dynamic_libs
+    collect_submodules
 )
 
 
+datas=[]
 
-datas = []
+binaries=[]
 
-binaries = []
-
-hiddenimports = []
-
+hiddenimports=[]
 
 
-# =========================
-# EasyOCR
-# =========================
+
+# =====================
+# 收集依赖
+# =====================
 
 for pkg in [
 
@@ -28,6 +25,8 @@ for pkg in [
     "cv2",
 
     "PIL",
+
+    "jaraco",
 
 ]:
 
@@ -48,49 +47,24 @@ for pkg in [
 
 
 
-# =========================
-# 动态DLL
-# =========================
-
-
-for pkg in [
-
-    "torch",
-
-    "torchvision",
-
-    "cv2",
-
-    "numpy"
-
-]:
-
-
-    try:
-
-        binaries += collect_dynamic_libs(pkg)
-
-
-    except Exception:
-
-        pass
-
-
-
-
-
-# =========================
-# EasyOCR模块
-# =========================
-
-
-hiddenimports += collect_submodules(
-    "easyocr"
-)
-
-
+# =====================
+# 强制隐藏模块
+# =====================
 
 hiddenimports += [
+
+    "pkg_resources",
+
+    "jaraco",
+
+    "jaraco.text",
+
+    "jaraco.functools",
+
+    "jaraco.context",
+
+
+    "easyocr",
 
     "torch",
 
@@ -116,18 +90,19 @@ hiddenimports += [
 
 
 
-# =========================
-# 图标
-# =========================
+hiddenimports += collect_submodules(
+    "easyocr"
+)
 
+
+
+# 图标
 
 datas.append(
-
     (
         "1.ico",
         "."
     )
-
 )
 
 
@@ -135,47 +110,32 @@ datas.append(
 a = Analysis(
 
     [
-
         "ScreenAlarm.py"
-
     ],
-
 
     pathex=[],
 
-
     binaries=binaries,
-
 
     datas=datas,
 
-
     hiddenimports=hiddenimports,
-
 
     hookspath=[],
 
-
     hooksconfig={},
-
 
     runtime_hooks=[],
 
-
     excludes=[
-
 
         "torch.cuda",
 
         "tensorboard",
 
-        "matplotlib.tests",
-
         "pytest"
 
-
     ],
-
 
     noarchive=False,
 
@@ -201,21 +161,15 @@ exe = EXE(
 
     exclude_binaries=True,
 
-
     name="数字报警",
-
 
     debug=False,
 
-
     strip=False,
-
 
     upx=False,
 
-
     console=False,
-
 
     icon="1.ico"
 
@@ -227,18 +181,13 @@ coll = COLLECT(
 
     exe,
 
-
     a.binaries,
-
 
     a.datas,
 
-
     strip=False,
 
-
     upx=False,
-
 
     name="数字报警"
 

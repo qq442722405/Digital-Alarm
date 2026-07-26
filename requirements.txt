@@ -14,4 +14,13 @@ torchvision
 
 pyinstaller==6.5.0
 
+
+# PyInstaller pkg_resources依赖
+
 setuptools==80.9.0
+
+jaraco.text
+
+jaraco.functools
+
+jaraco.context
