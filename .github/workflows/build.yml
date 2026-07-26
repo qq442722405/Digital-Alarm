@@ -1,6 +1,8 @@
-name: Build ScreenAlarm EXE
+name: 数字报警
 
 on:
+  push:
+    branches: [ "main", "master" ]
   workflow_dispatch:
 
 jobs:
@@ -8,29 +10,39 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - name: 检出源码
-        uses: actions/checkout@v4
+    - name: 检出代码
+      uses: actions/checkout@v4
 
-      - name: 安装 Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+    - name: 配置 Python 环境
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        cache: 'pip'
 
-      - name: 升级 pip
-        run: |
-          python -m pip install --upgrade pip
+    - name: 安装依赖
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
 
-      - name: 安装依赖
-        run: |
-          pip install -r requirements.txt
+    - name: 使用 PyInstaller 打包
+      shell: cmd
+      run: |
+        pyinstaller --noconsole --onefile ^
+          --icon=1.ico ^
+          --add-data "1.ico;." ^
+          --collect-all paddleocr ^
+          --collect-all paddle ^
+          --collect-all ppocr ^
+          --hidden-import=tools ^
+          --hidden-import=tools.infer ^
+          --hidden-import=paddleocr ^
+          --hidden-import=ppocr ^
+          --hidden-import=ppocr.utils ^
+          --name "ScreenMonitorAlarm" ^
+          ScreenAlarm.py
 
-      - name: 使用 Spec 打包 EXE
-        shell: cmd
-        run: |
-          pyinstaller --clean --noconfirm ScreenAlarm.spec
-
-      - name: 上传 EXE
-        uses: actions/upload-artifact@v4
-        with:
-          name: ScreenAlarm_EXE
-          path: dist/ScreenAlarm.exe
+    - name: 上传生成的 EXE 成果物
+      uses: actions/upload-artifact@v4
+      with:
+        name: ScreenMonitorAlarm-Windows
+        path: dist/ScreenMonitorAlarm.exe
