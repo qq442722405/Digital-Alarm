@@ -1,12 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-from PyInstaller.utils.hooks import (
-    collect_all,
-    collect_submodules
-)
-
-
-block_cipher = None
+from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 
 datas = []
@@ -14,110 +8,65 @@ binaries = []
 hiddenimports = []
 
 
-# ===============================
-# 自动收集依赖
-# ===============================
+# EasyOCR
 
-packages = [
+for pkg in [
 
     "easyocr",
-
-    "torch",
-
-    "torchvision",
-
     "cv2",
+    "PIL"
 
-    "PIL",
-
-    "jaraco",
-
-]
-
-
-for pkg in packages:
+]:
 
     try:
 
-        d, b, h = collect_all(pkg)
+        d,b,h = collect_all(pkg)
 
         datas += d
-
         binaries += b
-
         hiddenimports += h
 
-
-    except Exception:
+    except:
 
         pass
 
 
 
-# ===============================
-# EasyOCR子模块
-# ===============================
+# EasyOCR内部模块
 
-try:
-
-    hiddenimports += collect_submodules(
-        "easyocr"
-    )
-
-except:
-
-    pass
+hiddenimports += collect_submodules("easyocr")
 
 
 
-# ===============================
-# 强制隐藏依赖
-# ===============================
+# 必要依赖
 
 hiddenimports += [
 
-    # OCR
-    "easyocr",
+    "numpy",
+
+    "scipy",
+
+    "skimage",
 
     "python_bidi",
 
     "shapely",
 
-    "skimage",
+    "yaml",
 
-    "scipy",
-
-
-    # 图片
-    "PIL",
     "PIL.Image",
+
     "PIL.ImageGrab",
 
-
-    # numpy
-    "numpy",
-
-
-    # PyTorch
     "torch",
+
     "torchvision",
-
-
-    # setuptools pkg_resources
-    "pkg_resources",
-
-    "jaraco",
-    "jaraco.text",
-    "jaraco.functools",
-    "jaraco.context",
 
 ]
 
 
 
-# ===============================
 # 图标
-# ===============================
 
 datas.append(
     ("1.ico",".")
@@ -147,19 +96,15 @@ a = Analysis(
 
     excludes=[
 
-        "pytest",
+        "torch.cuda",
+
+        "tensorboard",
 
         "matplotlib.tests",
 
-        "torch.cuda"
+        "pytest"
 
     ],
-
-    win_no_prefer_redirects=False,
-
-    win_private_assemblies=False,
-
-    cipher=block_cipher,
 
     noarchive=False,
 
@@ -169,11 +114,7 @@ a = Analysis(
 
 pyz = PYZ(
 
-    a.pure,
-
-    a.zipped_data,
-
-    cipher=block_cipher
+    a.pure
 
 )
 
@@ -185,9 +126,9 @@ exe = EXE(
 
     a.scripts,
 
-    [],
+    a.datas,
 
-    exclude_binaries=True,
+    [],
 
     name="数字报警",
 
@@ -200,23 +141,5 @@ exe = EXE(
     console=False,
 
     icon="1.ico"
-
-)
-
-
-
-coll = COLLECT(
-
-    exe,
-
-    a.binaries,
-
-    a.datas,
-
-    strip=False,
-
-    upx=True,
-
-    name="数字报警"
 
 )
