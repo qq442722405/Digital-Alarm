@@ -19,27 +19,16 @@ jobs:
         python-version: '3.10'
         cache: 'pip'
 
-    - name: 安装依赖
+    - name: 安装基础编译工具与依赖
       run: |
-        python -m pip install --upgrade pip
+        python -m pip install --upgrade pip setuptools wheel
         pip install -r requirements.txt
+        # 强制显式预装 PaddleOCR 所需的 C 扩展核心库
+        pip install pyclipper shapely imgaug lmdb pyinstaller
 
-    - name: 使用 PyInstaller 打包
-      shell: cmd
+    - name: 使用 PyInstaller 根据 spec 打包
       run: |
-        pyinstaller --noconsole --onefile ^
-          --icon=1.ico ^
-          --add-data "1.ico;." ^
-          --collect-all paddleocr ^
-          --collect-all paddle ^
-          --collect-all ppocr ^
-          --hidden-import=tools ^
-          --hidden-import=tools.infer ^
-          --hidden-import=paddleocr ^
-          --hidden-import=ppocr ^
-          --hidden-import=ppocr.utils ^
-          --name "ScreenMonitorAlarm" ^
-          ScreenAlarm.py
+        pyinstaller --clean ScreenAlarm.spec
 
     - name: 上传生成的 EXE 成果物
       uses: actions/upload-artifact@v4
