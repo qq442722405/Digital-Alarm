@@ -7,4 +7,8 @@ numpy==1.26.4
 paddleocr==2.7.3
 paddlepaddle==2.6.2
 
+pyclipper
+lmdb
+scikit-image
+imgaug
 Pillow
