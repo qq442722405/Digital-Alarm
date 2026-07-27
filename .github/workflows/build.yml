@@ -3,7 +3,7 @@ name: Build OCR Tool
 on:
   push:
     branches: [ "main", "master" ]
-  workflow_dispatch: # 允许在 GitHub 网页上手动触发
+  workflow_dispatch:
 
 jobs:
   build:
@@ -11,7 +11,7 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -26,16 +26,17 @@ jobs:
 
     - name: Build with PyInstaller
       run: |
-        # 使用 -D(文件夹模式) 替代 -F(单文件模式)，因为 PaddleOCR 库很大，单文件解压极慢且易报错
-        # 使用 -w 隐藏命令行黑框
-        pyinstaller -w -D --name NumberOCR main.py
+        # 使用 -i 参数指定图标文件 1.ico
+        pyinstaller -w -F --icon=1.ico --name NumberOCR main.py
 
-    - name: Zip the build
+    - name: Rename Executable
+      # 打包完成后，将英文名重命名为中文名，避免 PyInstaller 处理中文名称时可能出现的编码问题
       run: |
-        Compress-Archive -Path dist\NumberOCR\* -DestinationPath NumberOCR_Windows.zip
+        Rename-Item -Path dist\NumberOCR.exe -NewName 数字报警.exe
+      shell: powershell
 
     - name: Upload Artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
-        name: NumberOCR_Windows
-        path: NumberOCR_Windows.zip
+        name: 数字报警_Windows
+        path: dist\数字报警.exe
