@@ -1,12 +1,15 @@
-name: Build 数字报警 EXE
+name: Build PaddleOCR 数字识别测试
 
 
+# 仅手动触发
 on:
 
   workflow_dispatch:
 
 
+
 jobs:
+
 
   build-windows:
 
@@ -17,12 +20,23 @@ jobs:
     steps:
 
 
-    - name: 下载源码
+    # =====================
+    # 获取代码
+    # =====================
+
+    - name: 检出源码
+
       uses: actions/checkout@v4
 
 
 
-    - name: Python环境
+
+    # =====================
+    # Python环境
+    # =====================
+
+    - name: 设置 Python
+
       uses: actions/setup-python@v5
 
       with:
@@ -30,6 +44,11 @@ jobs:
         python-version: "3.11"
 
 
+
+
+    # =====================
+    # 更新pip
+    # =====================
 
     - name: 更新pip
 
@@ -41,37 +60,32 @@ jobs:
 
 
 
-    # 安装CPU torch固定版本
-
-    - name: 安装Torch CPU
-
-      shell: cmd
-
-      run: |
-
-        pip install ^
-        torch==2.5.1+cpu ^
-        torchvision==0.20.1+cpu ^
-        --index-url https://download.pytorch.org/whl/cpu
 
 
+    # =====================
+    # 安装依赖
+    # =====================
 
-
-
-    - name: 安装依赖
+    - name: 安装项目依赖
 
       shell: cmd
 
       run: |
 
         pip install ^
+        --default-timeout=300 ^
+        --retries=10 ^
         -r requirements.txt
 
 
 
 
 
-    - name: 安装额外DLL支持
+    # =====================
+    # 安装PyInstaller
+    # =====================
+
+    - name: 安装打包工具
 
       shell: cmd
 
@@ -84,17 +98,27 @@ jobs:
 
 
 
-    - name: 检查文件
+    # =====================
+    # 检查文件
+    # =====================
+
+    - name: 检查工程
 
       shell: cmd
 
       run: |
 
+        echo =====目录=====
+
         dir
+
+
+        echo =====Python=====
 
         dir *.py
 
-        dir *.spec
+
+        echo =====ICO=====
 
         dir *.ico
 
@@ -102,22 +126,35 @@ jobs:
 
 
 
-    - name: 打包
+
+    # =====================
+    # 打包
+    # =====================
+
+    - name: PyInstaller打包
 
       shell: cmd
 
       run: |
 
+
         pyinstaller ^
         --clean ^
         --noconfirm ^
-        ScreenAlarm.spec
+        --onedir ^
+        --windowed ^
+        --name "数字识别测试" ^
+        main.py
 
 
 
 
 
-    - name: 查看结果
+    # =====================
+    # 查看结果
+    # =====================
+
+    - name: 查看生成文件
 
       shell: cmd
 
@@ -129,12 +166,18 @@ jobs:
 
 
 
-    - name: 上传
+    # =====================
+    # 上传
+    # =====================
+
+    - name: 上传EXE
 
       uses: actions/upload-artifact@v4
 
       with:
 
-        name: 数字报警-Windows
 
-        path: dist/数字报警
+        name: 数字识别测试-Windows
+
+
+        path: dist/数字识别测试
