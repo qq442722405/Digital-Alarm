@@ -1,87 +1,41 @@
-name: build 数字报警 exe
-
+name: Build OCR Tool
 
 on:
-  workflow_dispatch:
-
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch: # 允许在 GitHub 网页上手动触发
 
 jobs:
-
   build:
-
     runs-on: windows-latest
-
-
+    
     steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
 
-    - name: 检出代码
-      uses: actions/checkout@v4
-
-
-    - name: 安装Python
-
-      uses: actions/setup-python@v5
-
+    - name: Set up Python
+      uses: actions/setup-python@v4
       with:
+        python-version: '3.10'
 
-        python-version: "3.11"
-
-
-
-    - name: 升级pip
-
+    - name: Install dependencies
       run: |
-
         python -m pip install --upgrade pip
-
-
-
-    - name: 安装依赖
-
-      run: |
-
         pip install -r requirements.txt
-
-
-
-    - name: 安装PyInstaller
-
-      run: |
-
         pip install pyinstaller
 
-
-
-    - name: 打包
-
-      shell: pwsh
-
+    - name: Build with PyInstaller
       run: |
+        # 使用 -D(文件夹模式) 替代 -F(单文件模式)，因为 PaddleOCR 库很大，单文件解压极慢且易报错
+        # 使用 -w 隐藏命令行黑框
+        pyinstaller -w -D --name NumberOCR main.py
 
+    - name: Zip the build
+      run: |
+        Compress-Archive -Path dist\NumberOCR\* -DestinationPath NumberOCR_Windows.zip
 
-        pyinstaller `
-          --onefile `
-          --windowed `
-          --clean `
-          --name "数字报警" `
-          --icon "1.ico" `
-          --collect-all easyocr `
-          --collect-all torch `
-          --collect-all torchvision `
-          --collect-all cv2 `
-          --hidden-import=torch `
-          --hidden-import=torchvision `
-          --hidden-import=easyocr `
-          screen_number_v1.py
-
-
-
-    - name: 上传
-
-      uses: actions/upload-artifact@v4
-
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v3
       with:
-
-        name: 数字报警
-
-        path: dist/数字报警.exe
+        name: NumberOCR_Windows
+        path: NumberOCR_Windows.zip
