@@ -1,24 +1,27 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+
 from PyInstaller.utils.hooks import (
     collect_all,
     collect_submodules
 )
 
 
-datas=[]
 
-binaries=[]
+datas = []
 
-hiddenimports=[]
+binaries = []
+
+hiddenimports = []
 
 
 
-# =====================
-# 收集依赖
-# =====================
+# ======================
+# 收集模块
+# ======================
 
-for pkg in [
+
+packages = [
 
     "easyocr",
 
@@ -28,7 +31,13 @@ for pkg in [
 
     "jaraco",
 
-]:
+    "platformdirs",
+
+]
+
+
+
+for pkg in packages:
 
     try:
 
@@ -47,13 +56,28 @@ for pkg in [
 
 
 
-# =====================
-# 强制隐藏模块
-# =====================
+
+# ======================
+# EasyOCR
+# ======================
+
+hiddenimports += collect_submodules(
+    "easyocr"
+)
+
+
+
+# ======================
+# 强制导入
+# ======================
 
 hiddenimports += [
 
+
+    # setuptools
+
     "pkg_resources",
+
 
     "jaraco",
 
@@ -64,82 +88,118 @@ hiddenimports += [
     "jaraco.context",
 
 
+    "platformdirs",
+
+
+
+    # OCR
+
     "easyocr",
-
-    "torch",
-
-    "torchvision",
-
-    "numpy",
-
-    "scipy",
-
-    "skimage",
-
-    "yaml",
 
     "python_bidi",
 
     "shapely",
 
+    "skimage",
+
+    "scipy",
+
+
+
+    # 图片
+
+    "PIL",
+
     "PIL.Image",
 
     "PIL.ImageGrab",
+
+
+
+    # Torch
+
+    "torch",
+
+    "torchvision",
+
+
+    "numpy",
+
+    "yaml",
 
 ]
 
 
 
-hiddenimports += collect_submodules(
-    "easyocr"
-)
 
 
-
-# 图标
+# ======================
+# ICO
+# ======================
 
 datas.append(
+
     (
         "1.ico",
         "."
     )
+
 )
+
+
 
 
 
 a = Analysis(
 
     [
+
         "ScreenAlarm.py"
+
     ],
+
 
     pathex=[],
 
+
     binaries=binaries,
+
 
     datas=datas,
 
+
     hiddenimports=hiddenimports,
+
 
     hookspath=[],
 
+
     hooksconfig={},
+
 
     runtime_hooks=[],
 
+
     excludes=[
+
 
         "torch.cuda",
 
         "tensorboard",
 
-        "pytest"
+        "pytest",
+
+
+        "matplotlib.tests"
 
     ],
+
 
     noarchive=False,
 
 )
+
+
 
 
 
@@ -151,6 +211,8 @@ pyz = PYZ(
 
 
 
+
+
 exe = EXE(
 
     pyz,
@@ -159,17 +221,24 @@ exe = EXE(
 
     [],
 
+
     exclude_binaries=True,
+
 
     name="数字报警",
 
+
     debug=False,
+
 
     strip=False,
 
+
     upx=False,
 
+
     console=False,
+
 
     icon="1.ico"
 
@@ -177,17 +246,24 @@ exe = EXE(
 
 
 
+
+
 coll = COLLECT(
 
     exe,
 
+
     a.binaries,
+
 
     a.datas,
 
+
     strip=False,
 
+
     upx=False,
+
 
     name="数字报警"
 

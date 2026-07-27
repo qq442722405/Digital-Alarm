@@ -9,18 +9,17 @@ opencv-python-headless==4.8.1.78
 easyocr==1.7.1
 
 torch
-
 torchvision
 
 pyinstaller==6.5.0
 
 
-# PyInstaller pkg_resources依赖
+# PyInstaller依赖兼容
 
-setuptools==80.9.0
+setuptools==69.5.1
 
 jaraco.text
-
 jaraco.functools
-
 jaraco.context
+
+platformdirs
