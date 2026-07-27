@@ -8,13 +8,13 @@ opencv-python-headless==4.8.1.78
 
 easyocr==1.7.1
 
-torch
-torchvision
+
+torch==2.5.1+cpu
+torchvision==0.20.1+cpu
+
 
 pyinstaller==6.5.0
 
-
-# PyInstaller依赖兼容
 
 setuptools==69.5.1
 
