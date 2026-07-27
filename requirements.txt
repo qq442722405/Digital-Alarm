@@ -1,4 +1,9 @@
+PyQt5==5.15.10
+mss==9.0.2
+opencv-python==4.10.0.84
+numpy==1.26.4
+
+paddleocr==2.7.3
 paddlepaddle==2.6.1
-paddleocr>=2.7.0.3
+
 Pillow
-numpy<2.0.0

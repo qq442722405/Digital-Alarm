@@ -1,138 +1,402 @@
-import tkinter as tk
-from tkinter import messagebox
-from PIL import ImageGrab
-import numpy as np
-import re
-import os
 import sys
+import time
+import cv2
+import mss
+import numpy as np
 
-# 抑制 PaddleOCR 烦人的启动日志
-os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
+from PyQt5.QtWidgets import (
+    QApplication,
+    QWidget,
+    QLabel,
+    QPushButton,
+    QVBoxLayout
+)
 
-class ScreenSnip:
-    def __init__(self, parent, callback):
-        self.parent = parent
-        self.callback = callback
-        self.snip_window = tk.Toplevel(parent)
-        self.snip_window.attributes('-fullscreen', True)
-        self.snip_window.attributes('-alpha', 0.3) # 设置半透明遮罩
-        self.snip_window.config(cursor="cross")
-        
-        self.canvas = tk.Canvas(self.snip_window, cursor="cross", bg="gray")
-        self.canvas.pack(fill="both", expand=True)
+from PyQt5.QtGui import (
+    QPixmap,
+    QImage,
+    QPainter,
+    QPen
+)
 
-        self.start_x = None
-        self.start_y = None
-        self.rect = None
+from PyQt5.QtCore import Qt
 
-        self.canvas.bind("<ButtonPress-1>", self.on_press)
-        self.canvas.bind("<B1-Motion>", self.on_drag)
-        self.canvas.bind("<ButtonRelease-1>", self.on_release)
+from paddleocr import PaddleOCR
 
-    def on_press(self, event):
-        self.start_x = event.x
-        self.start_y = event.y
-        self.rect = self.canvas.create_rectangle(self.start_x, self.start_y, 1, 1, outline='red', width=2, fill="black")
 
-    def on_drag(self, event):
-        self.canvas.coords(self.rect, self.start_x, self.start_y, event.x, event.y)
+# ===============================
+# OCR初始化
+# ===============================
 
-    def on_release(self, event):
-        x1 = min(self.start_x, event.x)
-        y1 = min(self.start_y, event.y)
-        x2 = max(self.start_x, event.x)
-        y2 = max(self.start_y, event.y)
-        self.snip_window.destroy()
-        # 传递框选坐标
-        self.callback((x1, y1, x2, y2))
+print("正在加载OCR模型...")
 
-class OCRApp:
-    def __init__(self, root):
-        self.root = root
-        root.title("屏幕数字识别工具")
-        root.geometry("320x350")
-        root.attributes('-topmost', True) # 窗口置顶
+ocr = PaddleOCR(
+    use_angle_cls=False,
+    lang="en"
+)
 
-        self.bbox = None
-        self.img = None
-        
-        # 延迟加载 PaddleOCR（避免刚打开软件时卡顿）
-        self.ocr = None 
+print("OCR加载完成")
 
-        tk.Label(root, text="第一步：点击下方按钮框选屏幕区域", pady=5).pack()
-        tk.Button(root, text="1. 手动框选区域", command=self.start_snip, width=20, bg="#e0f7fa").pack(pady=5)
-        
-        tk.Label(root, text="第二步：确认框选后点击识别", pady=5).pack()
-        tk.Button(root, text="2. 识别数字", command=self.recognize, width=20, bg="#fff9c4").pack(pady=5)
 
-        tk.Label(root, text="识别结果：", pady=5).pack()
-        self.result_text = tk.Text(root, height=8, width=35, font=("Arial", 12))
-        self.result_text.pack(pady=5)
+# ===============================
+# 屏幕区域框选窗口
+# ===============================
 
-    def init_ocr(self):
-        if self.ocr is None:
-            self.result_text.delete(1.0, tk.END)
-            self.result_text.insert(tk.END, "首次运行正在加载 AI 模型，请稍候...\n(这可能需要几秒钟)")
-            self.root.update()
-            from paddleocr import PaddleOCR
-            # 使用 en 模型，体积小，对数字识别极准
-            self.ocr = PaddleOCR(use_angle_cls=False, lang='en', show_log=False)
+class SelectWindow(QWidget):
 
-    def start_snip(self):
-        self.root.iconify() # 截图时隐藏主窗口
-        self.root.after(200, lambda: ScreenSnip(self.root, self.on_snip_complete))
+    def __init__(self):
 
-    def on_snip_complete(self, bbox):
-        self.bbox = bbox
-        self.root.deiconify() # 恢复主窗口
-        
-        # 防止用户仅仅点了一下没有拖动
-        if bbox[2] - bbox[0] > 5 and bbox[3] - bbox[1] > 5:
-            self.img = ImageGrab.grab(bbox)
-            self.result_text.delete(1.0, tk.END)
-            self.result_text.insert(tk.END, "区域已锁定。准备就绪，请点击识别。")
-        else:
-            self.img = None
-            messagebox.showwarning("警告", "框选区域太小，请重新框选！")
+        super().__init__()
 
-    def recognize(self):
-        if not self.img:
-            messagebox.showwarning("提示", "请先点击【手动框选区域】")
+        self.start = None
+        self.end = None
+
+        self.setWindowFlags(
+            Qt.FramelessWindowHint |
+            Qt.WindowStaysOnTopHint
+        )
+
+        self.setWindowOpacity(0.25)
+
+        self.setStyleSheet(
+            "background-color:black;"
+        )
+
+        screen = QApplication.primaryScreen()
+
+        size = screen.size()
+
+        self.setGeometry(
+            0,
+            0,
+            size.width(),
+            size.height()
+        )
+
+
+    def mousePressEvent(self, event):
+
+        if event.button() == Qt.LeftButton:
+
+            self.start = event.pos()
+            self.end = self.start
+
+
+    def mouseMoveEvent(self, event):
+
+        if self.start:
+
+            self.end = event.pos()
+
+            self.update()
+
+
+    def mouseReleaseEvent(self, event):
+
+        if self.start:
+
+            self.end = event.pos()
+
+            self.close()
+
+
+    def paintEvent(self, event):
+
+        if self.start and self.end:
+
+            painter = QPainter(self)
+
+            pen = QPen(
+                Qt.red,
+                3
+            )
+
+            painter.setPen(pen)
+
+
+            painter.drawRect(
+                self.start.x(),
+                self.start.y(),
+                self.end.x() - self.start.x(),
+                self.end.y() - self.start.y()
+            )
+
+
+    def get_area(self):
+
+        x1 = self.start.x()
+        y1 = self.start.y()
+
+        x2 = self.end.x()
+        y2 = self.end.y()
+
+
+        return (
+
+            min(x1, x2),
+            min(y1, y2),
+            abs(x2-x1),
+            abs(y2-y1)
+
+        )
+
+
+
+# ===============================
+# 主窗口
+# ===============================
+
+class MainWindow(QWidget):
+
+    def __init__(self):
+
+        super().__init__()
+
+
+        self.setWindowTitle(
+            "数字报警 V1.0"
+        )
+
+        self.resize(
+            600,
+            500
+        )
+
+
+        self.area = None
+
+
+        self.label_area = QLabel(
+            "识别区域: 未选择"
+        )
+
+
+        self.label_result = QLabel(
+            "识别数字:"
+        )
+
+
+        self.preview = QLabel()
+
+        self.preview.setFixedSize(
+            400,
+            200
+        )
+
+
+        self.btn_select = QPushButton(
+            "框选数字区域"
+        )
+
+
+        self.btn_test = QPushButton(
+            "点击测试识别"
+        )
+
+
+        self.btn_select.clicked.connect(
+            self.select_area
+        )
+
+
+        self.btn_test.clicked.connect(
+            self.test_ocr
+        )
+
+
+        layout = QVBoxLayout()
+
+
+        layout.addWidget(
+            self.btn_select
+        )
+
+
+        layout.addWidget(
+            self.label_area
+        )
+
+
+        layout.addWidget(
+            self.btn_test
+        )
+
+
+        layout.addWidget(
+            self.preview
+        )
+
+
+        layout.addWidget(
+            self.label_result
+        )
+
+
+        self.setLayout(layout)
+
+
+
+    # ===========================
+    # 框选区域
+    # ===========================
+
+    def select_area(self):
+
+        self.selector = SelectWindow()
+
+        self.selector.show()
+
+        self.selector.closeEvent = self.area_close
+
+
+
+    def area_close(self, event):
+
+        self.area = self.selector.get_area()
+
+
+        self.label_area.setText(
+            f"识别区域:{self.area}"
+        )
+
+
+
+    # ===========================
+    # OCR测试
+    # ===========================
+
+    def test_ocr(self):
+
+        if not self.area:
+
+            self.label_result.setText(
+                "请先框选区域"
+            )
+
             return
 
-        self.init_ocr()
 
-        self.result_text.delete(1.0, tk.END)
-        self.result_text.insert(tk.END, "识别中，请稍候...\n")
-        self.root.update()
+        x, y, w, h = self.area
 
-        try:
-            # 将 PIL 图像转换为 PaddleOCR 需要的 OpenCV 格式 (BGR numpy array)
-            img_cv = np.array(self.img)
-            if len(img_cv.shape) == 3:
-                img_cv = img_cv[:, :, ::-1] 
 
-            results = self.ocr.ocr(img_cv, cls=False)
-            extracted_numbers = []
+        with mss.mss() as sct:
 
-            if results and results[0]:
-                for line in results[0]:
-                    text = line[1][0]
-                    # 正则表达式：只提取纯数字或带小数点的数字
-                    nums = re.findall(r'\d+\.?\d*', text)
-                    extracted_numbers.extend(nums)
+            screenshot = sct.grab({
 
-            self.result_text.delete(1.0, tk.END)
-            if extracted_numbers:
-                self.result_text.insert(tk.END, "\n".join(extracted_numbers))
-            else:
-                self.result_text.insert(tk.END, "该区域未发现数字。")
-                
-        except Exception as e:
-            self.result_text.delete(1.0, tk.END)
-            self.result_text.insert(tk.END, f"识别出错: {str(e)}")
+                "left": x,
+
+                "top": y,
+
+                "width": w,
+
+                "height": h
+
+            })
+
+
+        img = np.array(
+            screenshot
+        )
+
+
+        img = cv2.cvtColor(
+            img,
+            cv2.COLOR_BGRA2BGR
+        )
+
+
+        # 显示截图
+
+        rgb = cv2.cvtColor(
+            img,
+            cv2.COLOR_BGR2RGB
+        )
+
+
+        height, width, channel = rgb.shape
+
+
+        qimg = QImage(
+
+            rgb.data,
+
+            width,
+
+            height,
+
+            width * channel,
+
+            QImage.Format_RGB888
+
+        )
+
+
+        self.preview.setPixmap(
+
+            QPixmap.fromImage(qimg)
+            .scaled(
+                350,
+                150,
+                Qt.KeepAspectRatio
+            )
+
+        )
+
+
+        # OCR识别
+
+        start = time.time()
+
+
+        result = ocr.ocr(
+            img,
+            cls=False
+        )
+
+
+        text = ""
+
+
+        if result:
+
+            for line in result:
+
+                if line:
+
+                    for item in line:
+
+                        text += item[1][0] + " "
+
+
+
+        cost = time.time() - start
+
+
+        self.label_result.setText(
+
+            f"识别数字:{text}\n"
+            f"耗时:{cost:.2f}秒"
+
+        )
+
+
+
+# ===============================
+# 程序入口
+# ===============================
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = OCRApp(root)
-    root.mainloop()
+
+
+    app = QApplication(sys.argv)
+
+
+    window = MainWindow()
+
+
+    window.show()
+
+
+    sys.exit(
+        app.exec_()
+    )
