@@ -1,42 +1,106 @@
-name: Build OCR Tool
+name: 数字报警 EXE打包
+
 
 on:
-  push:
-    branches: [ "main", "master" ]
+
   workflow_dispatch:
 
+
 jobs:
+
+
   build:
+
+
     runs-on: windows-latest
-    
+
+
     steps:
-    - name: Checkout code
+
+
+    # 下载代码
+
+    - name: 检出代码
+
       uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
 
-    - name: Install dependencies
+
+    # 设置Python
+
+    - name: 设置Python环境
+
+      uses: actions/setup-python@v5
+
+      with:
+
+        python-version: "3.11"
+
+
+
+    # 升级pip
+
+    - name: 升级pip
+
       run: |
+
         python -m pip install --upgrade pip
+
+
+
+    # 安装依赖
+
+    - name: 安装项目依赖
+
+      run: |
+
         pip install -r requirements.txt
+
+
+
+    # 安装PyInstaller
+
+    - name: 安装PyInstaller
+
+      run: |
+
         pip install pyinstaller
 
-    - name: Build with PyInstaller
-      run: |
-        # 使用 -i 参数指定图标文件 1.ico
-        pyinstaller -w -F --icon=1.ico --name NumberOCR main.py
 
-    - name: Rename Executable
-      # 打包完成后，将英文名重命名为中文名，避免 PyInstaller 处理中文名称时可能出现的编码问题
-      run: |
-        Rename-Item -Path dist\NumberOCR.exe -NewName 数字报警.exe
-      shell: powershell
 
-    - name: Upload Artifact
+    # 打包
+
+    - name: PyInstaller打包数字报警
+
+      shell: pwsh
+
+      run: |
+
+
+        pyinstaller `
+          --onefile `
+          --windowed `
+          --clean `
+          --name "数字报警" `
+          --icon "1.ico" `
+          --collect-all paddleocr `
+          --collect-all paddle `
+          --collect-all cv2 `
+          --hidden-import paddle `
+          --hidden-import paddleocr `
+          --hidden-import cv2 `
+          main.py
+
+
+
+    # 上传生成文件
+
+    - name: 上传EXE文件
+
       uses: actions/upload-artifact@v4
+
       with:
-        name: 数字报警_Windows
-        path: dist\数字报警.exe
+
+        name: 数字报警
+
+        path: dist/数字报警.exe
