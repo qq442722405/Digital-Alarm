@@ -20,6 +20,7 @@ jobs:
 
 
     - name: 检出源码
+
       uses: actions/checkout@v4
 
 
@@ -34,17 +35,21 @@ jobs:
 
 
 
-    - name: 升级pip
+    - name: 升级 pip
 
       shell: cmd
 
       run: |
 
-        python -m pip install --upgrade pip setuptools wheel
+        python -m pip install --upgrade pip
 
 
 
-    - name: 安装CPU Torch
+    # =========================
+    # CPU版 Torch
+    # =========================
+
+    - name: 安装 CPU PyTorch
 
       shell: cmd
 
@@ -58,7 +63,12 @@ jobs:
 
 
 
-    - name: 安装依赖
+
+    # =========================
+    # 项目依赖
+    # =========================
+
+    - name: 安装 requirements
 
       shell: cmd
 
@@ -71,22 +81,33 @@ jobs:
 
 
 
-    # 强制安装jaraco
 
-    - name: 安装PyInstaller运行依赖
+    # =========================
+    # PyInstaller依赖补充
+    # =========================
+
+    - name: 安装运行依赖
 
       shell: cmd
 
       run: |
 
         pip install ^
+        setuptools==69.5.1 ^
         jaraco.text ^
         jaraco.functools ^
-        jaraco.context
+        jaraco.context ^
+        platformdirs
 
 
 
-    - name: 检查文件
+
+
+    # =========================
+    # 检查文件
+    # =========================
+
+    - name: 检查工程
 
       shell: cmd
 
@@ -94,13 +115,25 @@ jobs:
 
         dir
 
+        echo =================
+
         dir *.py
 
+        echo =================
+
         dir *.spec
+
+        echo =================
 
         dir *.ico
 
 
+
+
+
+    # =========================
+    # 打包
+    # =========================
 
     - name: PyInstaller打包
 
@@ -115,7 +148,13 @@ jobs:
 
 
 
-    - name: 查看输出
+
+
+    # =========================
+    # 查看输出
+    # =========================
+
+    - name: 查看生成文件
 
       shell: cmd
 
@@ -124,6 +163,12 @@ jobs:
         dir dist
 
 
+
+
+
+    # =========================
+    # 上传
+    # =========================
 
     - name: 上传数字报警
 
