@@ -8,7 +8,9 @@ on:
 
 jobs:
 
+
   build:
+
 
     runs-on: windows-latest
 
@@ -31,7 +33,7 @@ jobs:
 
 
 
-    - name: 升级pip
+    - name: 升级工具
 
       run: |
 
@@ -44,6 +46,8 @@ jobs:
       run: |
 
         pip install -r requirements.txt
+
+        pip install cython
 
 
 
@@ -70,9 +74,13 @@ jobs:
           --icon "1.ico" `
           --collect-all paddle `
           --collect-all paddleocr `
+          --collect-all Cython `
           --collect-all cv2 `
-          --hidden-import paddle `
-          --hidden-import paddleocr `
+          --hidden-import=paddle `
+          --hidden-import=paddleocr `
+          --hidden-import=Cython `
+          --hidden-import=Cython.Compiler `
+          --hidden-import=Cython.Utility `
           main.py
 
 
