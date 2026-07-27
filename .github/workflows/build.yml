@@ -1,15 +1,12 @@
 name: Build PaddleOCR 数字识别测试
 
 
-# 仅手动触发
 on:
 
   workflow_dispatch:
 
 
-
 jobs:
-
 
   build-windows:
 
@@ -20,22 +17,12 @@ jobs:
     steps:
 
 
-    # =====================
-    # 获取代码
-    # =====================
-
     - name: 检出源码
-
       uses: actions/checkout@v4
 
 
 
-
-    # =====================
-    # Python环境
-    # =====================
-
-    - name: 设置 Python
+    - name: 设置Python
 
       uses: actions/setup-python@v5
 
@@ -44,11 +31,6 @@ jobs:
         python-version: "3.11"
 
 
-
-
-    # =====================
-    # 更新pip
-    # =====================
 
     - name: 更新pip
 
@@ -60,11 +42,39 @@ jobs:
 
 
 
+    # 先安装numpy固定版本
+
+    - name: 安装基础依赖
+
+      shell: cmd
+
+      run: |
+
+        pip install ^
+        numpy==1.24.4
 
 
-    # =====================
-    # 安装依赖
-    # =====================
+
+
+    # 安装Paddle
+
+    - name: 安装PaddleOCR
+
+      shell: cmd
+
+      run: |
+
+        pip install ^
+        paddlepaddle==2.6.2
+
+
+        pip install ^
+        paddleocr==2.7.3
+
+
+
+
+    # 其它依赖
 
     - name: 安装项目依赖
 
@@ -73,70 +83,34 @@ jobs:
       run: |
 
         pip install ^
-        --default-timeout=300 ^
-        --retries=10 ^
-        -r requirements.txt
-
-
-
-
-
-    # =====================
-    # 安装PyInstaller
-    # =====================
-
-    - name: 安装打包工具
-
-      shell: cmd
-
-      run: |
-
-        pip install ^
+        PyQt5==5.15.10 ^
+        opencv-python==4.8.1.78 ^
+        pillow==10.3.0 ^
+        pyautogui ^
         pyinstaller==6.5.0
 
 
 
 
 
-    # =====================
-    # 检查文件
-    # =====================
-
-    - name: 检查工程
+    - name: 检查文件
 
       shell: cmd
 
       run: |
 
-        echo =====目录=====
-
         dir
-
-
-        echo =====Python=====
 
         dir *.py
 
 
-        echo =====ICO=====
-
-        dir *.ico
 
 
-
-
-
-
-    # =====================
-    # 打包
-    # =====================
-
-    - name: PyInstaller打包
+    - name: 打包
 
       shell: cmd
 
       run: |
-
 
         pyinstaller ^
         --clean ^
@@ -149,35 +123,12 @@ jobs:
 
 
 
-
-    # =====================
-    # 查看结果
-    # =====================
-
-    - name: 查看生成文件
-
-      shell: cmd
-
-      run: |
-
-        dir dist
-
-
-
-
-
-    # =====================
-    # 上传
-    # =====================
-
-    - name: 上传EXE
+    - name: 上传程序
 
       uses: actions/upload-artifact@v4
 
       with:
 
-
         name: 数字识别测试-Windows
-
 
         path: dist/数字识别测试
