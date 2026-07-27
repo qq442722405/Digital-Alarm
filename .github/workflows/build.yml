@@ -1,35 +1,90 @@
-name: Build OCR Tool
+name: 数字报警 EXE打包
+
 
 on:
-  push:
-    branches: [ "main", "master" ]
+
   workflow_dispatch:
 
+
 jobs:
+
+
   build:
+
+
     runs-on: windows-latest
-    
+
+
     steps:
-    - name: Checkout code
+
+
+    - name: 检出代码
       uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
 
-    - name: Install dependencies
+
+    - name: 设置Python
+
+      uses: actions/setup-python@v5
+
+      with:
+
+        python-version: "3.11"
+
+
+
+    - name: 升级工具
+
       run: |
-        python -m pip install --upgrade pip
+
+        python -m pip install --upgrade pip setuptools wheel
+
+
+
+    - name: 安装依赖
+
+      run: |
+
         pip install -r requirements.txt
+
         pip install pyinstaller
 
-    - name: Build with PyInstaller
-      run: |
-        pyinstaller -w -D --name NumberOCR main.py
 
-    - name: Upload Artifact
+
+    - name: 打包数字报警
+
+      shell: pwsh
+
+      run: |
+
+
+        pyinstaller `
+          --onefile `
+          --windowed `
+          --clean `
+          --name "数字报警" `
+          --icon "1.ico" `
+          --collect-all paddle `
+          --collect-all paddleocr `
+          --collect-all pyclipper `
+          --collect-all Cython `
+          --collect-all cv2 `
+          --hidden-import=paddle `
+          --hidden-import=paddleocr `
+          --hidden-import=pyclipper `
+          --hidden-import=lmdb `
+          --hidden-import=skimage `
+          --hidden-import=imgaug `
+          main.py
+
+
+
+    - name: 上传EXE
+
       uses: actions/upload-artifact@v4
+
       with:
-        name: NumberOCR_Windows
-        path: dist\NumberOCR\
+
+        name: 数字报警
+
+        path: dist/数字报警.exe
