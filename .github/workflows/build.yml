@@ -1,4 +1,4 @@
-name: Build PaddleOCR 数字识别测试
+name: build screen number exe
 
 
 on:
@@ -8,8 +8,7 @@ on:
 
 jobs:
 
-  build-windows:
-
+  build:
 
     runs-on: windows-latest
 
@@ -17,13 +16,12 @@ jobs:
     steps:
 
 
-    - name: 检出源码
+    - name: 下载代码
       uses: actions/checkout@v4
 
 
 
-    - name: 设置Python
-
+    - name: 安装Python
       uses: actions/setup-python@v5
 
       with:
@@ -34,101 +32,43 @@ jobs:
 
     - name: 更新pip
 
-      shell: cmd
+      run:
+
+        python -m pip install --upgrade pip
+
+
+
+    - name: 安装依赖
+
+      run:
+
+        pip install -r requirements.txt
+
+
+
+    - name: PyInstaller打包
 
       run: |
 
-        python -m pip install --upgrade pip setuptools wheel
-
-
-
-    # 先安装numpy固定版本
-
-    - name: 安装基础依赖
-
-      shell: cmd
-
-      run: |
-
-        pip install ^
-        numpy==1.24.4
-
-
-
-
-    # 安装Paddle
-
-    - name: 安装PaddleOCR
-
-      shell: cmd
-
-      run: |
-
-        pip install ^
-        paddlepaddle==2.6.2
-
-
-        pip install ^
-        paddleocr==2.7.3
-
-
-
-
-    # 其它依赖
-
-    - name: 安装项目依赖
-
-      shell: cmd
-
-      run: |
-
-        pip install ^
-        PyQt5==5.15.10 ^
-        opencv-python==4.8.1.78 ^
-        pillow==10.3.0 ^
-        pyautogui ^
-        pyinstaller==6.5.0
-
-
-
-
-
-    - name: 检查文件
-
-      shell: cmd
-
-      run: |
-
-        dir
-
-        dir *.py
-
-
-
-
-    - name: 打包
-
-      shell: cmd
-
-      run: |
 
         pyinstaller ^
-        --clean ^
-        --noconfirm ^
-        --onedir ^
-        --windowed ^
-        --name "数字识别测试" ^
-        main.py
+          --onefile ^
+          --windowed ^
+          --name "屏幕数字识别V1" ^
+          --collect-all easyocr ^
+          --collect-all torch ^
+          --collect-all torchvision ^
+          --hidden-import=cv2 ^
+          screen_number_v1.py
 
 
 
-
-    - name: 上传程序
+    - name: 上传EXE
 
       uses: actions/upload-artifact@v4
 
       with:
 
-        name: 数字识别测试-Windows
+        name: screen_number_v1
 
-        path: dist/数字识别测试
+        path: dist/*.exe
