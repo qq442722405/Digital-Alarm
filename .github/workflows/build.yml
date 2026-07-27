@@ -2,7 +2,6 @@ name: build 数字报警 exe
 
 
 on:
-
   workflow_dispatch:
 
 
@@ -15,13 +14,12 @@ jobs:
 
     steps:
 
-
     - name: 检出代码
       uses: actions/checkout@v4
 
 
+    - name: 安装Python
 
-    - name: 设置Python
       uses: actions/setup-python@v5
 
       with:
@@ -54,27 +52,31 @@ jobs:
 
 
 
-    - name: 打包EXE
+    - name: 打包
 
       shell: pwsh
 
       run: |
 
+
         pyinstaller `
           --onefile `
           --windowed `
+          --clean `
           --name "数字报警" `
           --icon "1.ico" `
           --collect-all easyocr `
           --collect-all torch `
           --collect-all torchvision `
-          --hidden-import=cv2 `
-          --hidden-import=PIL `
+          --collect-all cv2 `
+          --hidden-import=torch `
+          --hidden-import=torchvision `
+          --hidden-import=easyocr `
           screen_number_v1.py
 
 
 
-    - name: 上传EXE
+    - name: 上传
 
       uses: actions/upload-artifact@v4
 
