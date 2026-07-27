@@ -3,7 +3,7 @@ name: Build Single Executable
 on:
   push:
     branches: [ "main", "master" ]
-  workflow_dispatch:  # 支持手动在网页点击运行构建
+  workflow_dispatch:
 
 jobs:
   build:
@@ -18,22 +18,16 @@ jobs:
       with:
         python-version: '3.10'
 
-    - name: 3. 安装 Windows Tesseract OCR 引擎
-      run: |
-        choco install tesseract --no-progress
-        # 将 Tesseract OCR 复制到工程根目录以便打包打包进单文件 EXE
-        xcopy "C:\Program Files\Tesseract-OCR" "Tesseract-OCR\" /E /I /H /Y
-
-    - name: 4. 安装 Python 依赖
+    - name: 3. 安装 Python 依赖
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: 5. 使用 PyInstaller 打包单文件 EXE
+    - name: 4. 打包单文件 EXE
       run: |
-        pyinstaller --noconfirm --onefile --windowed --icon="1.ico" --name="数字报警" --add-data "1.ico;." --add-data "Tesseract-OCR;Tesseract-OCR" main.py
+        pyinstaller --noconfirm --onefile --windowed --collect-all ddddocr --icon="1.ico" --name="数字报警" --add-data "1.ico;." main.py
 
-    - name: 6. 上传生成的 EXE 到 GitHub Artifacts
+    - name: 5. 上传 EXE Artifact
       uses: actions/upload-artifact@v4
       with:
         name: 数字报警-Windows单文件版
