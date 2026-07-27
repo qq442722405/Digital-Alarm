@@ -1,90 +1,40 @@
-name: 数字报警 EXE打包
-
+name: Build Single Executable
 
 on:
-
-  workflow_dispatch:
-
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:  # 支持手动在网页点击运行构建
 
 jobs:
-
-
   build:
-
-
     runs-on: windows-latest
 
-
     steps:
-
-
-    - name: 检出代码
+    - name: 1. 拉取代码
       uses: actions/checkout@v4
 
-
-
-    - name: 设置Python
-
+    - name: 2. 配置 Python 环境
       uses: actions/setup-python@v5
-
       with:
+        python-version: '3.10'
 
-        python-version: "3.11"
-
-
-
-    - name: 升级工具
-
+    - name: 3. 安装 Windows Tesseract OCR 引擎
       run: |
+        choco install tesseract --no-progress
+        # 将 Tesseract OCR 复制到工程根目录以便打包打包进单文件 EXE
+        xcopy "C:\Program Files\Tesseract-OCR" "Tesseract-OCR\" /E /I /H /Y
 
-        python -m pip install --upgrade pip setuptools wheel
-
-
-
-    - name: 安装依赖
-
+    - name: 4. 安装 Python 依赖
       run: |
-
+        python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-        pip install pyinstaller
-
-
-
-    - name: 打包数字报警
-
-      shell: pwsh
-
+    - name: 5. 使用 PyInstaller 打包单文件 EXE
       run: |
+        pyinstaller --noconfirm --onefile --windowed --icon="1.ico" --name="数字报警" --add-data "1.ico;." --add-data "Tesseract-OCR;Tesseract-OCR" main.py
 
-
-        pyinstaller `
-          --onefile `
-          --windowed `
-          --clean `
-          --name "数字报警" `
-          --icon "1.ico" `
-          --collect-all paddle `
-          --collect-all paddleocr `
-          --collect-all pyclipper `
-          --collect-all Cython `
-          --collect-all cv2 `
-          --hidden-import=paddle `
-          --hidden-import=paddleocr `
-          --hidden-import=pyclipper `
-          --hidden-import=lmdb `
-          --hidden-import=skimage `
-          --hidden-import=imgaug `
-          main.py
-
-
-
-    - name: 上传EXE
-
+    - name: 6. 上传生成的 EXE 到 GitHub Artifacts
       uses: actions/upload-artifact@v4
-
       with:
-
-        name: 数字报警
-
+        name: 数字报警-Windows单文件版
         path: dist/数字报警.exe
