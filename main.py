@@ -1,9 +1,11 @@
+import io
 import os
+import re
 import sys
 import tkinter as tk
 from tkinter import messagebox
 from PIL import ImageGrab
-import pytesseract
+import ddddocr
 import pyperclip
 
 # ==================== Windows 高分屏 (DPI) 适配 ====================
@@ -17,22 +19,12 @@ if sys.platform.startswith('win'):
         except Exception:
             pass
 
-# ==================== 资源路径兼容 (PyInstaller 单文件模式) ====================
+
 def resource_path(relative_path):
-    """ 获取静态资源或打包后临时解压文件的绝对路径 """
+    """ 获取静态资源（如图标）绝对路径 """
     if hasattr(sys, '_MEIPASS'):
         return os.path.join(sys._MEIPASS, relative_path)
     return os.path.join(os.path.abspath("."), relative_path)
-
-# 1. 优先调用内嵌打包的 Tesseract 引擎
-bundled_tesseract = resource_path(os.path.join("Tesseract-OCR", "tesseract.exe"))
-if os.path.exists(bundled_tesseract):
-    pytesseract.pytesseract.tesseract_cmd = bundled_tesseract
-else:
-    # 2. 本地开发测试回退路径
-    default_win_path = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-    if os.path.exists(default_win_path):
-        pytesseract.pytesseract.tesseract_cmd = default_win_path
 
 
 class ScreenOCRApp:
@@ -40,10 +32,16 @@ class ScreenOCRApp:
         self.root = root
         self.root.title("数字报警")
         self.root.geometry("360x220")
-        self.root.attributes("-topmost", True)  # 保持最前
+        self.root.attributes("-topmost", True)
         self.root.resizable(False, False)
 
-        # 设置软件窗口图标 (1.ico)
+        # 初始化 ddddocr 引擎（关闭日志/广告输出）
+        try:
+            self.ocr = ddddocr.DdddOcr(show_ad=False)
+        except Exception as e:
+            messagebox.showerror("初始化错误", f"OCR引擎加载失败: {e}")
+
+        # 加载图标
         ico_file = resource_path("1.ico")
         if os.path.exists(ico_file):
             try:
@@ -51,7 +49,7 @@ class ScreenOCRApp:
             except Exception:
                 pass
 
-        # UI 界面
+        # 界面布局
         self.btn_select = tk.Button(
             root, 
             text="🔍 点击框选识别", 
@@ -75,7 +73,7 @@ class ScreenOCRApp:
         self.label_tip.pack()
 
     def start_selection(self):
-        """隐藏主窗口，开启全屏框选"""
+        """隐藏主窗口并开启透明遮罩"""
         self.root.withdraw()
 
         self.overlay = tk.Toplevel(self.root)
@@ -122,20 +120,28 @@ class ScreenOCRApp:
             self.recognize_digits(img)
 
     def recognize_digits(self, img):
-        """纯数字/小数点识别逻辑"""
+        """内存识别数字"""
         try:
-            custom_config = r'--psm 6 -c tessedit_char_whitelist=0123456789.'
-            text = pytesseract.image_to_string(img, config=custom_config).strip()
+            # 1. 将截图转换为内存字节流，完全绕过磁盘路径，避开中文路径 Bug
+            img_byte_arr = io.BytesIO()
+            img.save(img_byte_arr, format='PNG')
+            image_bytes = img_byte_arr.getvalue()
 
-            if text:
-                self.label_result.config(text=text, fg="#008000")
-                pyperclip.copy(text)
+            # 2. 执行神经网络识别
+            raw_text = self.ocr.classification(image_bytes)
+
+            # 3. 过滤提炼数字和小数点
+            digits_only = "".join(re.findall(r'[\d\.]+', raw_text))
+
+            if digits_only:
+                self.label_result.config(text=digits_only, fg="#008000")
+                pyperclip.copy(digits_only)
             else:
                 self.label_result.config(text="未识别到数字", fg="#FF0000")
 
         except Exception as e:
-            self.label_result.config(text="识别失败", fg="#FF0000")
-            messagebox.showerror("识别错误", f"请检查环境或框选区域。\n\n详情:\n{e}")
+            self.label_result.config(text="识别出错", fg="#FF0000")
+            messagebox.showerror("识别错误", f"识别过程出错：\n{e}")
 
 
 if __name__ == "__main__":
