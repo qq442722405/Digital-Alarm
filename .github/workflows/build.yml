@@ -6,9 +6,7 @@ on:
   workflow_dispatch:
 
 
-
 jobs:
-
 
   build-windows:
 
@@ -19,14 +17,12 @@ jobs:
     steps:
 
 
-    - name: 检出源码
-
+    - name: 下载源码
       uses: actions/checkout@v4
 
 
 
-    - name: 设置 Python
-
+    - name: Python环境
       uses: actions/setup-python@v5
 
       with:
@@ -35,79 +31,60 @@ jobs:
 
 
 
-    - name: 升级 pip
+    - name: 更新pip
 
       shell: cmd
 
       run: |
 
-        python -m pip install --upgrade pip
+        python -m pip install --upgrade pip setuptools wheel
 
 
 
-    # =========================
-    # CPU版 Torch
-    # =========================
+    # 安装CPU torch固定版本
 
-    - name: 安装 CPU PyTorch
+    - name: 安装Torch CPU
 
       shell: cmd
 
       run: |
 
         pip install ^
-        --default-timeout=300 ^
-        --retries=10 ^
-        torch torchvision ^
+        torch==2.5.1+cpu ^
+        torchvision==0.20.1+cpu ^
         --index-url https://download.pytorch.org/whl/cpu
 
 
 
 
-    # =========================
-    # 项目依赖
-    # =========================
 
-    - name: 安装 requirements
+    - name: 安装依赖
 
       shell: cmd
 
       run: |
 
         pip install ^
-        --default-timeout=300 ^
-        --retries=10 ^
         -r requirements.txt
 
 
 
 
-    # =========================
-    # PyInstaller依赖补充
-    # =========================
 
-    - name: 安装运行依赖
+    - name: 安装额外DLL支持
 
       shell: cmd
 
       run: |
 
         pip install ^
-        setuptools==69.5.1 ^
-        jaraco.text ^
-        jaraco.functools ^
-        jaraco.context ^
-        platformdirs
+        pyinstaller==6.5.0
 
 
 
 
 
-    # =========================
-    # 检查文件
-    # =========================
-
-    - name: 检查工程
+    - name: 检查文件
 
       shell: cmd
 
@@ -115,15 +92,9 @@ jobs:
 
         dir
 
-        echo =================
-
         dir *.py
 
-        echo =================
-
         dir *.spec
-
-        echo =================
 
         dir *.ico
 
@@ -131,11 +102,7 @@ jobs:
 
 
 
-    # =========================
-    # 打包
-    # =========================
-
-    - name: PyInstaller打包
+    - name: 打包
 
       shell: cmd
 
@@ -150,11 +117,7 @@ jobs:
 
 
 
-    # =========================
-    # 查看输出
-    # =========================
-
-    - name: 查看生成文件
+    - name: 查看结果
 
       shell: cmd
 
@@ -166,11 +129,7 @@ jobs:
 
 
 
-    # =========================
-    # 上传
-    # =========================
-
-    - name: 上传数字报警
+    - name: 上传
 
       uses: actions/upload-artifact@v4
 
